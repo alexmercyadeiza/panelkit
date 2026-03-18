@@ -213,7 +213,8 @@ async function executeDeploy(
     }
 
     // Use app-level overrides if set, otherwise use detected commands
-    const installCommand = app.buildCommand || detection.installCommand;
+    const installCommand = detection.installCommand;
+    const buildCommand = app.buildCommand || detection.buildCommand;
     const startCommand = app.startCommand || detection.startCommand;
 
     if (!startCommand) {
@@ -243,6 +244,23 @@ async function executeDeploy(
       }
 
       logs.push("[deploy] Dependencies installed");
+    }
+
+    // 5b. Build step
+    if (buildCommand) {
+      logs.push(`[deploy] Building: ${buildCommand}`);
+
+      const buildResult = await runShellCommand(buildCommand, repoDir);
+
+      if (!buildResult.success) {
+        logs.push(`[deploy] Build failed: ${buildResult.stderr}`);
+        throw new DeployError(
+          `Build failed: ${buildResult.stderr}`,
+          500
+        );
+      }
+
+      logs.push("[deploy] Build completed");
     }
 
     await db

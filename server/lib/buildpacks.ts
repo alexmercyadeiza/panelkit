@@ -16,6 +16,8 @@ export interface DetectionResult {
   detectedBy: string | null;
   /** Command to install dependencies */
   installCommand: string | null;
+  /** Command to build the application (null if no build needed) */
+  buildCommand: string | null;
   /** Command to start the application */
   startCommand: string | null;
   /** Default port the app listens on */
@@ -34,6 +36,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
       runtime: "nodejs",
       detectedBy: "package.json",
       installCommand: commands.install,
+      buildCommand: commands.build,
       startCommand: commands.start,
       defaultPort: 3000,
     };
@@ -47,6 +50,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
         runtime: "python",
         detectedBy: file,
         installCommand: commands.install,
+        buildCommand: null,
         startCommand: commands.start,
         defaultPort: 8000,
       };
@@ -59,6 +63,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
       runtime: "go",
       detectedBy: "go.mod",
       installCommand: "go build -o server .",
+      buildCommand: null,
       startCommand: "./server",
       defaultPort: 8080,
     };
@@ -70,6 +75,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
       runtime: "php",
       detectedBy: "composer.json",
       installCommand: "composer install --no-dev --optimize-autoloader",
+      buildCommand: null,
       startCommand: "php -S 0.0.0.0:80 -t .",
       defaultPort: 80,
     };
@@ -81,6 +87,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
       runtime: "static",
       detectedBy: "index.html",
       installCommand: null,
+      buildCommand: null,
       startCommand: "npx serve -s . -l 80",
       defaultPort: 80,
     };
@@ -91,6 +98,7 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
     runtime: "unknown",
     detectedBy: null,
     installCommand: null,
+    buildCommand: null,
     startCommand: null,
     defaultPort: 3000,
   };
@@ -100,8 +108,15 @@ export async function detectRuntime(dir: string): Promise<DetectionResult> {
 
 async function getNodeCommands(
   dir: string
-): Promise<{ install: string; start: string }> {
+): Promise<{ install: string; build: string | null; start: string }> {
   const lockfile = await detectNodeLockfile(dir);
+
+  const run = {
+    npm: "npm run",
+    yarn: "yarn",
+    pnpm: "pnpm run",
+    bun: "bun run",
+  }[lockfile];
 
   const installCmd = {
     npm: "npm install",
@@ -110,19 +125,25 @@ async function getNodeCommands(
     bun: "bun install",
   }[lockfile];
 
-  // Try to read package.json for the start script
+  let buildCmd: string | null = null;
   let startCmd: string;
+
   try {
     const pkg = await Bun.file(join(dir, "package.json")).json();
+
+    // Detect build script
+    if (pkg.scripts?.build) {
+      buildCmd = `${run} build`;
+    }
+
+    // Detect start script
     if (pkg.scripts?.start) {
-      startCmd =
-        lockfile === "bun"
-          ? "bun start"
-          : lockfile === "pnpm"
-            ? "pnpm start"
-            : lockfile === "yarn"
-              ? "yarn start"
-              : "npm start";
+      startCmd = `${run.replace(" run", "")} start`;
+      // npm needs "npm start" not "npm run start"
+      if (lockfile === "npm") startCmd = "npm start";
+    } else if (pkg.scripts?.preview) {
+      // For frameworks that build then preview (Vite, TanStack Start, etc.)
+      startCmd = `${run} preview`;
     } else if (pkg.main) {
       startCmd = lockfile === "bun" ? `bun ${pkg.main}` : `node ${pkg.main}`;
     } else {
@@ -132,7 +153,7 @@ async function getNodeCommands(
     startCmd = lockfile === "bun" ? "bun start" : "npm start";
   }
 
-  return { install: installCmd, start: startCmd };
+  return { install: installCmd, build: buildCmd, start: startCmd };
 }
 
 type NodePkgManager = "npm" | "yarn" | "pnpm" | "bun";
