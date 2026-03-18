@@ -5,6 +5,56 @@ import type { AppDatabase } from "../db";
 import { settings } from "../db/schema";
 import { encrypt, decrypt } from "./crypto.service";
 
+// ─── GitHub Credentials (stored in DB, encrypted) ──────────────────────────
+
+export async function saveGitHubCredentials(
+  db: AppDatabase,
+  clientId: string,
+  clientSecret: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  const encryptedSecret = await encrypt(clientSecret);
+
+  for (const [key, value] of [
+    ["github_client_id", clientId],
+    ["github_client_secret", encryptedSecret],
+  ] as const) {
+    const existing = await db.query.settings.findFirst({
+      where: eq(settings.key, key),
+    });
+    if (existing) {
+      await db.update(settings).set({ value, updatedAt: now }).where(eq(settings.key, key));
+    } else {
+      await db.insert(settings).values({ key, value, updatedAt: now });
+    }
+  }
+}
+
+export async function getGitHubCredentials(
+  db: AppDatabase
+): Promise<{ clientId: string; clientSecret: string } | null> {
+  const idRow = await db.query.settings.findFirst({
+    where: eq(settings.key, "github_client_id"),
+  });
+  const secretRow = await db.query.settings.findFirst({
+    where: eq(settings.key, "github_client_secret"),
+  });
+
+  if (!idRow || !secretRow) return null;
+
+  try {
+    const clientSecret = await decrypt(secretRow.value);
+    return { clientId: idRow.value, clientSecret };
+  } catch {
+    return null;
+  }
+}
+
+export async function removeGitHubCredentials(db: AppDatabase): Promise<void> {
+  await db.delete(settings).where(eq(settings.key, "github_client_id"));
+  await db.delete(settings).where(eq(settings.key, "github_client_secret"));
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface GitHubRepo {

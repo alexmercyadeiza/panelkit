@@ -224,6 +224,85 @@ function AddChannelForm({
 
 // ─── Settings Page ──────────────────────────────────────────────────────────
 
+// ─── GitHub Setup Form ──────────────────────────────────────────────────────
+
+function GitHubSetupForm({ onSaved }: { onSaved: () => void }) {
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSave() {
+    if (!clientId.trim() || !clientSecret.trim()) {
+      setError("Both fields are required");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await api("/github/credentials", {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: clientId.trim(),
+          clientSecret: clientSecret.trim(),
+        }),
+      });
+      onSaved();
+    } catch (err: any) {
+      setError(err.message || "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="text-sm text-zinc-300 mb-3">
+          To connect GitHub, create an OAuth App at{" "}
+          <a
+            href="https://github.com/settings/developers"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline"
+          >
+            github.com/settings/developers
+          </a>
+        </p>
+        <p className="text-xs text-zinc-500 mb-4">
+          Set the callback URL to: <code className="font-mono-code text-zinc-400">{window.location.origin}/api/github/callback</code>
+        </p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-zinc-400 mb-1.5">Client ID</label>
+        <input
+          type="text"
+          value={clientId}
+          onChange={(e) => setClientId(e.target.value)}
+          className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono-code text-sm"
+          placeholder="Ov23li..."
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-zinc-400 mb-1.5">Client Secret</label>
+        <input
+          type="password"
+          value={clientSecret}
+          onChange={(e) => setClientSecret(e.target.value)}
+          className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded-lg text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono-code text-sm"
+          placeholder="••••••••••••••••"
+        />
+      </div>
+      {error && (
+        <p className="text-sm text-red-400">{error}</p>
+      )}
+      <Button variant="primary" size="sm" onClick={handleSave} loading={saving}>
+        Save Credentials
+      </Button>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [channelsLoading, setChannelsLoading] = useState(true);
@@ -434,15 +513,7 @@ export function SettingsPage() {
               </Button>
             </div>
           ) : githubStatus?.configured === false ? (
-            <div>
-              <p className="text-sm text-zinc-400 mb-1">
-                GitHub OAuth is not configured
-              </p>
-              <p className="text-xs text-zinc-600">
-                Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment
-                variables to enable GitHub integration.
-              </p>
-            </div>
+            <GitHubSetupForm onSaved={() => fetchGitHubStatus()} />
           ) : (
             <div className="flex items-center justify-between">
               <div>

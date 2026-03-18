@@ -6,6 +6,7 @@ import { getDb } from "../db";
 import { settings } from "../db/schema";
 import { getConfig } from "../config";
 import { authMiddleware } from "../middleware/auth";
+import { z } from "zod";
 import {
   getOAuthUrl,
   exchangeCodeForToken,
@@ -14,6 +15,9 @@ import {
   removeGitHubToken,
   listRepos,
   getGitHubUser,
+  saveGitHubCredentials,
+  getGitHubCredentials,
+  removeGitHubCredentials,
 } from "../services/github.service";
 
 const githubRoutes = new Hono();
@@ -27,12 +31,33 @@ githubRoutes.use("*", async (c, next) => {
   return authMiddleware(c, next);
 });
 
+// ─── Resolve GitHub credentials (DB first, env fallback) ────────────────────
+
+async function resolveCredentials(): Promise<{
+  clientId: string;
+  clientSecret: string;
+} | null> {
+  const db = getDb();
+  const dbCreds = await getGitHubCredentials(db);
+  if (dbCreds) return dbCreds;
+
+  const config = getConfig();
+  if (config.GITHUB_CLIENT_ID && config.GITHUB_CLIENT_SECRET) {
+    return {
+      clientId: config.GITHUB_CLIENT_ID,
+      clientSecret: config.GITHUB_CLIENT_SECRET,
+    };
+  }
+
+  return null;
+}
+
 // ─── GET /api/github/status ─────────────────────────────────────────────────
 
 githubRoutes.get("/status", async (c) => {
-  const config = getConfig();
+  const creds = await resolveCredentials();
 
-  if (!config.GITHUB_CLIENT_ID || !config.GITHUB_CLIENT_SECRET) {
+  if (!creds) {
     return c.json({ connected: false, configured: false });
   }
 
@@ -57,24 +82,21 @@ githubRoutes.get("/status", async (c) => {
 // ─── GET /api/github/authorize ──────────────────────────────────────────────
 
 githubRoutes.get("/authorize", async (c) => {
-  const config = getConfig();
+  const creds = await resolveCredentials();
 
-  if (!config.GITHUB_CLIENT_ID) {
+  if (!creds) {
     return c.json(
-      { error: "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET." },
+      { error: "GitHub OAuth is not configured. Add your Client ID and Secret in Settings." },
       400
     );
   }
 
-  // Build redirect URI from the request origin
   const requestUrl = new URL(c.req.url);
   const origin = `${requestUrl.protocol}//${requestUrl.host}`;
   const redirectUri = `${origin}/api/github/callback`;
 
-  // Generate a simple state parameter to prevent CSRF
   const state = crypto.randomUUID();
 
-  // Store state in settings temporarily
   const db = getDb();
   const now = new Date().toISOString();
   const existing = await db.query.settings.findFirst({
@@ -94,7 +116,7 @@ githubRoutes.get("/authorize", async (c) => {
     });
   }
 
-  const url = getOAuthUrl(config.GITHUB_CLIENT_ID, redirectUri, state);
+  const url = getOAuthUrl(creds.clientId, redirectUri, state);
 
   return c.json({ url });
 });
@@ -102,9 +124,9 @@ githubRoutes.get("/authorize", async (c) => {
 // ─── GET /api/github/callback ───────────────────────────────────────────────
 
 githubRoutes.get("/callback", async (c) => {
-  const config = getConfig();
+  const creds = await resolveCredentials();
 
-  if (!config.GITHUB_CLIENT_ID || !config.GITHUB_CLIENT_SECRET) {
+  if (!creds) {
     return c.json({ error: "GitHub OAuth not configured" }, 400);
   }
 
@@ -115,7 +137,6 @@ githubRoutes.get("/callback", async (c) => {
     return c.json({ error: "Missing authorization code" }, 400);
   }
 
-  // Validate state parameter
   const db = getDb();
 
   const storedState = await db.query.settings.findFirst({
@@ -126,14 +147,12 @@ githubRoutes.get("/callback", async (c) => {
     return c.json({ error: "Invalid OAuth state" }, 400);
   }
 
-  // Clean up state
   await db.delete(settings).where(eq(settings.key, "github_oauth_state"));
 
   try {
-    // Exchange code for token
     const token = await exchangeCodeForToken(
-      config.GITHUB_CLIENT_ID,
-      config.GITHUB_CLIENT_SECRET,
+      creds.clientId,
+      creds.clientSecret,
       code
     );
 
@@ -185,6 +204,32 @@ githubRoutes.get("/repos", async (c) => {
 
 githubRoutes.post("/disconnect", async (c) => {
   const db = getDb();
+  await removeGitHubToken(db);
+  return c.json({ success: true });
+});
+
+// ─── POST /api/github/credentials ─────────────────────────────────────────
+
+const credentialsSchema = z.object({
+  clientId: z.string().min(1, "Client ID is required"),
+  clientSecret: z.string().min(1, "Client Secret is required"),
+});
+
+githubRoutes.post("/credentials", async (c) => {
+  const body = await c.req.json();
+  const parsed = credentialsSchema.parse(body);
+
+  const db = getDb();
+  await saveGitHubCredentials(db, parsed.clientId, parsed.clientSecret);
+
+  return c.json({ success: true });
+});
+
+// ─── DELETE /api/github/credentials ───────────────────────────────────────
+
+githubRoutes.delete("/credentials", async (c) => {
+  const db = getDb();
+  await removeGitHubCredentials(db);
   await removeGitHubToken(db);
   return c.json({ success: true });
 });
