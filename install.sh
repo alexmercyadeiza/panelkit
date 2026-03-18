@@ -9,7 +9,7 @@
 set -e
 set -o pipefail
 
-PANELKIT_REPO="${PANELKIT_REPO:-}"
+PANELKIT_REPO="${PANELKIT_REPO:-https://github.com/alexmercyadeiza/panelkit.git}"
 DATE=$(date +"%Y%m%d-%H%M%S")
 PANELKIT_DIR="/var/panelkit"
 INSTALL_DIR="/opt/panelkit"
