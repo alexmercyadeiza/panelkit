@@ -119,6 +119,12 @@ async function executeDeploy(
 
     const repoExists = await dirExists(join(repoDir, ".git"));
 
+    // Clean up leftover directory from a failed clone (exists but no .git)
+    if (!repoExists && await dirExists(repoDir)) {
+      logs.push("[deploy] Cleaning up leftover directory from previous failed deploy...");
+      await cleanupDir(repoDir);
+    }
+
     if (repoExists) {
       logs.push("[deploy] Pulling latest changes...");
       const pullResult = await pullRepo(repoDir);
