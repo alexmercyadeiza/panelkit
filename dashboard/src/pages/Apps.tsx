@@ -636,6 +636,7 @@ function AppDetailView({
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentsLoading, setDeploymentsLoading] = useState(true);
   const [deployLog, setDeployLog] = useState<string | null>(null);
+  const [expandedDeployId, setExpandedDeployId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [currentApp, setCurrentApp] = useState<App>(app);
 
@@ -757,6 +758,23 @@ function AppDetailView({
         </div>
       )}
 
+      {/* Deploy Log — shown first, always visible when there's a log */}
+      {(deployLog || deployments[0]?.buildLog) && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
+              Deploy Log
+            </h3>
+            {deployments[0] && (
+              <StatusBadge status={deployments[0].status} />
+            )}
+          </div>
+          <pre className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-zinc-300 font-mono-code overflow-x-auto max-h-96 overflow-y-auto whitespace-pre-wrap">
+            {deployLog || deployments[0]?.buildLog}
+          </pre>
+        </div>
+      )}
+
       {/* App Info Card */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
@@ -844,18 +862,6 @@ function AppDetailView({
         </div>
       </div>
 
-      {/* Deploy Log */}
-      {deployLog && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-          <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide">
-            Deploy Log
-          </h3>
-          <pre className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 text-xs text-zinc-300 font-mono-code overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
-            {deployLog}
-          </pre>
-        </div>
-      )}
-
       {/* Env Vars */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <EnvVarEditor appId={app.id} />
@@ -873,21 +879,50 @@ function AppDetailView({
         ) : (
           <div className="space-y-2">
             {deployments.map((d) => (
-              <div
-                key={d.id}
-                className="flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-950/50 border border-zinc-800/50"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <StatusBadge status={d.status} />
-                  {d.commitHash && (
-                    <span className="text-xs text-zinc-500 font-mono-code">
-                      {d.commitHash.slice(0, 7)}
+              <div key={d.id}>
+                <button
+                  onClick={() =>
+                    setExpandedDeployId(
+                      expandedDeployId === d.id ? null : d.id
+                    )
+                  }
+                  className="w-full flex items-center justify-between py-2 px-3 rounded-lg bg-zinc-950/50 border border-zinc-800/50 hover:bg-zinc-800/30 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <StatusBadge status={d.status} />
+                    {d.commitHash && (
+                      <span className="text-xs text-zinc-500 font-mono-code">
+                        {d.commitHash.slice(0, 7)}
+                      </span>
+                    )}
+                    {d.commitMessage && (
+                      <span className="text-xs text-zinc-500 truncate max-w-[200px]">
+                        {d.commitMessage}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-zinc-600">
+                      {timeAgo(d.createdAt)}
                     </span>
-                  )}
-                </div>
-                <span className="text-xs text-zinc-600 shrink-0">
-                  {timeAgo(d.createdAt)}
-                </span>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className={`text-zinc-600 transition-transform ${expandedDeployId === d.id ? "rotate-180" : ""}`}
+                    >
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </div>
+                </button>
+                {expandedDeployId === d.id && d.buildLog && (
+                  <pre className="mt-1 bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-xs text-zinc-400 font-mono-code overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
+                    {d.buildLog}
+                  </pre>
+                )}
               </div>
             ))}
           </div>
