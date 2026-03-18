@@ -88,7 +88,7 @@ app.get("*", serveStatic({ root: "./dashboard/dist", path: "/index.html" }));
 
 // ─── Start Server ────────────────────────────────────────────────────────────
 
-export default app;
+export { app };
 
 export function createApp(dbPath?: string) {
   const testApp = new Hono();
