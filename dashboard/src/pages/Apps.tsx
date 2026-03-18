@@ -3,7 +3,6 @@ import { api, ApiError } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { EmptyState } from "../components/ui/EmptyState";
-import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,8 +13,6 @@ interface App {
   branch: string;
   buildCommand: string | null;
   startCommand: string | null;
-  dockerfilePath: string | null;
-  deployMode: "docker" | "pm2";
   status: string;
   autoDeployEnabled: boolean;
   containerId: string | null;
@@ -65,7 +62,6 @@ function CreateAppForm({
   const [name, setName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
-  const [deployMode, setDeployMode] = useState<"docker" | "pm2">("docker");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,7 +72,7 @@ function CreateAppForm({
     try {
       await api("/apps", {
         method: "POST",
-        body: JSON.stringify({ name, repoUrl, branch, deployMode }),
+        body: JSON.stringify({ name, repoUrl, branch }),
       });
       onCreated();
     } catch (err) {
@@ -134,33 +130,17 @@ function CreateAppForm({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1.5">
-              Branch
-            </label>
-            <input
-              type="text"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="main"
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono-code"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-1.5">
-              Deploy Mode
-            </label>
-            <Select
-              value={deployMode}
-              onChange={(v) => setDeployMode(v as "docker" | "pm2")}
-              options={[
-                { value: "docker", label: "Docker" },
-                { value: "pm2", label: "PM2" },
-              ]}
-            />
-          </div>
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-1.5">
+            Branch
+          </label>
+          <input
+            type="text"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            placeholder="main"
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono-code"
+          />
         </div>
 
         <div className="pt-2">
@@ -470,23 +450,15 @@ function AppDetailView({
             </span>
           </div>
           <div>
-            <span className="text-xs text-zinc-500 block">Deploy Mode</span>
-            <span className="text-sm text-white font-mono-code">
-              {currentApp.deployMode}
-            </span>
-          </div>
-          <div>
             <span className="text-xs text-zinc-500 block">Port</span>
             <span className="text-sm text-white font-mono-code">
               {currentApp.port ?? "--"}
             </span>
           </div>
           <div>
-            <span className="text-xs text-zinc-500 block">Container</span>
+            <span className="text-xs text-zinc-500 block">PM2 Process</span>
             <span className="text-sm text-white font-mono-code truncate block">
-              {currentApp.containerId
-                ? currentApp.containerId.slice(0, 12)
-                : "--"}
+              {currentApp.containerId || "--"}
             </span>
           </div>
           <div>
@@ -774,7 +746,7 @@ export function AppsPage() {
 
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-zinc-800/50">
                 <span className="text-xs text-zinc-600 font-mono-code">
-                  {app.deployMode}
+                  pm2
                 </span>
                 <span className="text-xs text-zinc-600">
                   {timeAgo(app.updatedAt)}

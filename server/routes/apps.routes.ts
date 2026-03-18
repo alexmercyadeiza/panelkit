@@ -18,7 +18,6 @@ import {
   DeployError,
 } from "../services/deploy.service";
 import { releaseAppPorts } from "../lib/port-manager";
-import { stopContainer, removeContainer } from "../services/docker.service";
 import { authMiddleware } from "../middleware/auth";
 
 const appsRoutes = new Hono();
@@ -35,8 +34,6 @@ const createAppSchema = z.object({
   branch: z.string().default("main"),
   buildCommand: z.string().optional(),
   startCommand: z.string().optional(),
-  dockerfilePath: z.string().optional(),
-  deployMode: z.enum(["docker", "pm2"]).default("docker"),
   autoDeployEnabled: z.boolean().default(true),
 });
 
@@ -51,8 +48,6 @@ const updateAppSchema = z.object({
   branch: z.string().optional(),
   buildCommand: z.string().nullable().optional(),
   startCommand: z.string().nullable().optional(),
-  dockerfilePath: z.string().nullable().optional(),
-  deployMode: z.enum(["docker", "pm2"]).optional(),
   autoDeployEnabled: z.boolean().optional(),
 });
 
@@ -82,8 +77,7 @@ appsRoutes.post("/", async (c) => {
     branch: parsed.branch,
     buildCommand: parsed.buildCommand || null,
     startCommand: parsed.startCommand || null,
-    dockerfilePath: parsed.dockerfilePath || null,
-    deployMode: parsed.deployMode,
+    deployMode: "pm2",
     autoDeployEnabled: parsed.autoDeployEnabled,
     webhookSecret,
     createdAt: now,
@@ -151,8 +145,6 @@ appsRoutes.put("/:id", async (c) => {
   if (parsed.branch !== undefined) updates.branch = parsed.branch;
   if (parsed.buildCommand !== undefined) updates.buildCommand = parsed.buildCommand;
   if (parsed.startCommand !== undefined) updates.startCommand = parsed.startCommand;
-  if (parsed.dockerfilePath !== undefined) updates.dockerfilePath = parsed.dockerfilePath;
-  if (parsed.deployMode !== undefined) updates.deployMode = parsed.deployMode;
   if (parsed.autoDeployEnabled !== undefined) updates.autoDeployEnabled = parsed.autoDeployEnabled;
 
   await db.update(apps).set(updates).where(eq(apps.id, id));
@@ -177,11 +169,14 @@ appsRoutes.delete("/:id", async (c) => {
     return c.json({ error: "App not found" }, 404);
   }
 
-  // Stop and remove container if running
+  // Stop and remove PM2 process if running
   if (app.containerId) {
     try {
-      await stopContainer(app.containerId, 5);
-      await removeContainer(app.containerId);
+      const proc = Bun.spawn(["pm2", "delete", app.containerId], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      await proc.exited;
     } catch {
       // Best effort cleanup
     }

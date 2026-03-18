@@ -1,4 +1,4 @@
-// ─── Deploy Orchestrator Service ─────────────────────────────────────────────
+// ─── Deploy Orchestrator Service (PM2) ───────────────────────────────────────
 
 import { eq, desc } from "drizzle-orm";
 import { type AppDatabase, getDb } from "../db";
@@ -12,13 +12,6 @@ import {
   getAppRepoDir,
   getAppsDir,
 } from "./git.service";
-import {
-  buildImage,
-  createContainer,
-  stopContainer,
-  removeContainer,
-  getContainerStatus,
-} from "./docker.service";
 import { detectRuntime } from "../lib/buildpacks";
 import { allocatePort, releasePort } from "../lib/port-manager";
 import { getConfig } from "../config";
@@ -31,7 +24,7 @@ const deployQueues = new Map<string, Promise<DeployResult>>();
 export interface DeployResult {
   success: boolean;
   deploymentId: string;
-  containerId?: string;
+  processName?: string;
   port?: number;
   error?: string;
   buildLog?: string;
@@ -181,55 +174,53 @@ async function executeDeploy(
 
     logs.push(`[deploy] Commit: ${commitHash?.substring(0, 8)} — ${commitMessage}`);
 
-    // 4. Detect runtime & generate Dockerfile
+    // 4. Detect runtime
     const detection = await detectRuntime(repoDir);
     logs.push(`[deploy] Runtime detected: ${detection.runtime} (via ${detection.detectedBy})`);
 
     if (detection.runtime === "unknown") {
       throw new DeployError(
-        "Could not detect runtime. Add a Dockerfile or supported project file.",
+        "Could not detect runtime. Add a supported project file (package.json, requirements.txt, go.mod, etc.).",
         400
       );
     }
 
-    // Write generated Dockerfile if needed
-    if (detection.dockerfile && detection.runtime !== "dockerfile") {
-      const dockerfilePath = join(repoDir, "Dockerfile.panelkit");
-      await Bun.write(dockerfilePath, detection.dockerfile);
-      logs.push("[deploy] Generated Dockerfile.panelkit");
+    // Use app-level overrides if set, otherwise use detected commands
+    const installCommand = app.buildCommand || detection.installCommand;
+    const startCommand = app.startCommand || detection.startCommand;
+
+    if (!startCommand) {
+      throw new DeployError(
+        "Could not determine start command for the detected runtime.",
+        400
+      );
     }
 
-    // 5. Build Docker image
-    const imageName = `panelkit-${app.name}`;
-    const imageTag = commitHash?.substring(0, 8) || deploymentId.substring(0, 8);
-    const dockerfilePath =
-      app.dockerfilePath ||
-      (detection.runtime === "dockerfile"
-        ? join(repoDir, "Dockerfile")
-        : join(repoDir, "Dockerfile.panelkit"));
+    // 5. Install dependencies
+    if (installCommand) {
+      logs.push(`[deploy] Installing dependencies: ${installCommand}`);
 
-    logs.push(`[deploy] Building image ${imageName}:${imageTag}...`);
+      await db
+        .update(deployments)
+        .set({ status: "building" })
+        .where(eq(deployments.id, deploymentId));
 
-    const buildResult = await buildImage({
-      contextDir: repoDir,
-      imageName,
-      tag: imageTag,
-      dockerfilePath,
-    });
+      const installResult = await runShellCommand(installCommand, repoDir);
 
-    if (!buildResult.success) {
-      logs.push(`[deploy] Build failed: ${buildResult.stderr}`);
-      throw new DeployError(`Build failed: ${buildResult.stderr}`, 500);
+      if (!installResult.success) {
+        logs.push(`[deploy] Install failed: ${installResult.stderr}`);
+        throw new DeployError(
+          `Dependency install failed: ${installResult.stderr}`,
+          500
+        );
+      }
+
+      logs.push("[deploy] Dependencies installed");
     }
-
-    logs.push("[deploy] Build completed");
 
     await db
       .update(deployments)
-      .set({
-        status: "deploying",
-        imageId: `${imageName}:${imageTag}`,
-      })
+      .set({ status: "deploying" })
       .where(eq(deployments.id, deploymentId));
 
     // 6. Get env vars
@@ -246,74 +237,67 @@ async function executeDeploy(
       }
     }
 
-    // 7. Blue-green: keep old container running
-    const oldContainerName = app.containerId;
-    const containerName = `panelkit-${app.name}-${imageTag}`;
-
-    // Allocate port
+    // 7. Allocate port
     let port = app.port;
     if (!port) {
       port = await allocatePort(appId, db);
       logs.push(`[deploy] Allocated port ${port}`);
     }
 
-    // Determine container port based on runtime
-    const containerPort = getContainerPort(detection.runtime);
-
-    // 8. Start new container
-    logs.push(`[deploy] Starting container ${containerName}...`);
-
     // Add PORT env var so the app knows which port to listen on
-    envVars.PORT = String(containerPort);
+    envVars.PORT = String(port);
 
-    const runResult = await createContainer({
-      imageName: `${imageName}:${imageTag}`,
-      containerName,
-      port: { host: port, container: containerPort },
-      envVars,
-      restart: "unless-stopped",
+    // 8. PM2 process name
+    const processName = `panelkit-${app.name}`;
+    const oldProcessName = app.containerId; // repurposed from containerId
+
+    // 9. Stop old PM2 process if exists
+    if (oldProcessName) {
+      logs.push(`[deploy] Stopping old process ${oldProcessName}...`);
+      await pm2Delete(oldProcessName);
+      logs.push("[deploy] Old process stopped");
+    }
+
+    // 10. Start new PM2 process
+    logs.push(`[deploy] Starting PM2 process ${processName}...`);
+
+    const pm2Result = await pm2Start({
+      name: processName,
+      script: startCommand,
+      cwd: repoDir,
+      env: envVars,
     });
 
-    if (!runResult.success) {
-      logs.push(`[deploy] Container start failed: ${runResult.stderr}`);
+    if (!pm2Result.success) {
+      logs.push(`[deploy] PM2 start failed: ${pm2Result.stderr}`);
       throw new DeployError(
-        `Container start failed: ${runResult.stderr}`,
+        `PM2 start failed: ${pm2Result.stderr}`,
         500
       );
     }
 
-    const containerId = runResult.stdout;
-    logs.push(`[deploy] Container started: ${containerId.substring(0, 12)}`);
+    logs.push("[deploy] PM2 process started");
 
-    // 9. Health check
+    // 11. Health check
     logs.push("[deploy] Running health check...");
     const healthy = await waitForHealthy(port, 30000);
 
     if (!healthy) {
       logs.push("[deploy] Health check failed, rolling back...");
-      await stopContainer(containerName);
-      await removeContainer(containerName);
+      await pm2Delete(processName);
       throw new DeployError("Health check failed after 30s", 500);
     }
 
     logs.push("[deploy] Health check passed");
 
-    // 10. Remove old container (blue-green swap)
-    if (oldContainerName && oldContainerName !== containerName) {
-      logs.push(`[deploy] Removing old container ${oldContainerName}...`);
-      await stopContainer(oldContainerName, 5);
-      await removeContainer(oldContainerName);
-      logs.push("[deploy] Old container removed");
-    }
-
-    // 11. Update app and deployment records
+    // 12. Update app and deployment records
     const finishedAt = new Date().toISOString();
 
     await db
       .update(apps)
       .set({
         status: "running",
-        containerId: containerName,
+        containerId: processName, // repurposed as PM2 process name
         port,
         runtime: detection.runtime,
         currentDeploymentId: deploymentId,
@@ -325,7 +309,7 @@ async function executeDeploy(
       .update(deployments)
       .set({
         status: "running",
-        containerId: containerName,
+        containerId: processName,
         finishedAt,
         buildLog: logs.join("\n"),
       })
@@ -336,7 +320,7 @@ async function executeDeploy(
     return {
       success: true,
       deploymentId,
-      containerId: containerName,
+      processName,
       port,
       buildLog: logs.join("\n"),
     };
@@ -373,7 +357,8 @@ async function executeDeploy(
 // ─── Rollback ───────────────────────────────────────────────────────────────
 
 /**
- * Rollback to a previous deployment.
+ * Rollback to a previous deployment by re-deploying from the repo
+ * at the target commit.
  */
 export async function rollback(
   appId: string,
@@ -412,11 +397,11 @@ export async function rollback(
       (d) =>
         d.status === "running" &&
         d.id !== app.currentDeploymentId &&
-        d.imageId
+        d.commitHash
     );
   }
 
-  if (!targetDeploy || !targetDeploy.imageId) {
+  if (!targetDeploy || !targetDeploy.commitHash) {
     throw new DeployError("No previous deployment found to rollback to", 404);
   }
 
@@ -428,7 +413,6 @@ export async function rollback(
     commitMessage: `Rollback to ${targetDeploy.id.substring(0, 8)}`,
     branch: targetDeploy.branch,
     status: "deploying",
-    imageId: targetDeploy.imageId,
     startedAt: now,
     createdAt: now,
   });
@@ -440,6 +424,22 @@ export async function rollback(
         .update(deployments)
         .set({ status: "rolled_back" })
         .where(eq(deployments.id, app.currentDeploymentId));
+    }
+
+    // Checkout the target commit in the repo
+    const repoDir = getAppRepoDir(appId);
+
+    if (targetDeploy.commitHash) {
+      await runShellCommand(`git checkout ${targetDeploy.commitHash}`, repoDir);
+    }
+
+    // Detect runtime and install deps
+    const detection = await detectRuntime(repoDir);
+    const installCommand = app.buildCommand || detection.installCommand;
+    const startCommand = app.startCommand || detection.startCommand;
+
+    if (installCommand) {
+      await runShellCommand(installCommand, repoDir);
     }
 
     // Get env vars
@@ -461,23 +461,26 @@ export async function rollback(
       throw new DeployError("App has no allocated port", 500);
     }
 
-    const containerPort = getContainerPort(app.runtime || "nodejs");
-    envVars.PORT = String(containerPort);
+    envVars.PORT = String(port);
 
-    const containerName = `panelkit-${app.name}-rollback-${deploymentId.substring(0, 8)}`;
+    const processName = `panelkit-${app.name}`;
 
-    // Start new container from old image
-    const runResult = await createContainer({
-      imageName: targetDeploy.imageId,
-      containerName,
-      port: { host: port, container: containerPort },
-      envVars,
-      restart: "unless-stopped",
+    // Stop current PM2 process
+    if (app.containerId) {
+      await pm2Delete(app.containerId);
+    }
+
+    // Start new PM2 process
+    const pm2Result = await pm2Start({
+      name: processName,
+      script: startCommand || "npm start",
+      cwd: repoDir,
+      env: envVars,
     });
 
-    if (!runResult.success) {
+    if (!pm2Result.success) {
       throw new DeployError(
-        `Rollback container start failed: ${runResult.stderr}`,
+        `Rollback PM2 start failed: ${pm2Result.stderr}`,
         500
       );
     }
@@ -486,15 +489,8 @@ export async function rollback(
     const healthy = await waitForHealthy(port, 30000);
 
     if (!healthy) {
-      await stopContainer(containerName);
-      await removeContainer(containerName);
+      await pm2Delete(processName);
       throw new DeployError("Rollback health check failed", 500);
-    }
-
-    // Remove current container
-    if (app.containerId) {
-      await stopContainer(app.containerId, 5);
-      await removeContainer(app.containerId);
     }
 
     const finishedAt = new Date().toISOString();
@@ -504,7 +500,7 @@ export async function rollback(
       .update(apps)
       .set({
         status: "running",
-        containerId: containerName,
+        containerId: processName,
         currentDeploymentId: deploymentId,
         updatedAt: finishedAt,
       })
@@ -514,7 +510,7 @@ export async function rollback(
       .update(deployments)
       .set({
         status: "running",
-        containerId: containerName,
+        containerId: processName,
         finishedAt,
       })
       .where(eq(deployments.id, deploymentId));
@@ -522,7 +518,7 @@ export async function rollback(
     return {
       success: true,
       deploymentId,
-      containerId: containerName,
+      processName,
       port,
     };
   } catch (error) {
@@ -589,21 +585,122 @@ export async function validateWebhookSignature(
   return result === 0;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── PM2 Helpers ─────────────────────────────────────────────────────────────
 
-function getContainerPort(runtime: string): number {
-  switch (runtime) {
-    case "nodejs":
-      return 3000;
-    case "python":
-      return 8000;
-    case "go":
-      return 8080;
-    case "php":
-    case "static":
-      return 80;
-    default:
-      return 3000;
+interface PM2StartConfig {
+  name: string;
+  script: string;
+  cwd: string;
+  env: Record<string, string>;
+}
+
+interface ShellResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Start a PM2 process using an ecosystem file for env var support.
+ */
+async function pm2Start(config: PM2StartConfig): Promise<ShellResult> {
+  const ecosystem = {
+    apps: [
+      {
+        name: config.name,
+        script: config.script,
+        cwd: config.cwd,
+        env: config.env,
+        autorestart: true,
+        max_restarts: 10,
+      },
+    ],
+  };
+
+  const ecosystemPath = join(
+    config.cwd,
+    `ecosystem.panelkit.json`
+  );
+
+  try {
+    await Bun.write(ecosystemPath, JSON.stringify(ecosystem, null, 2));
+
+    const proc = Bun.spawn(["pm2", "start", ecosystemPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: config.cwd,
+    });
+
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    const exitCode = await proc.exited;
+
+    return {
+      success: exitCode === 0,
+      stdout,
+      stderr,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Delete (stop and remove) a PM2 process. Best-effort — does not throw.
+ */
+async function pm2Delete(processName: string): Promise<void> {
+  try {
+    const proc = Bun.spawn(["pm2", "delete", processName], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    await proc.exited;
+  } catch {
+    // Best effort
+  }
+}
+
+// ─── Shell Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Run a shell command in a given directory.
+ */
+async function runShellCommand(
+  command: string,
+  cwd: string
+): Promise<ShellResult> {
+  try {
+    const proc = Bun.spawn(["sh", "-c", command], {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd,
+    });
+
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    const exitCode = await proc.exited;
+
+    return {
+      success: exitCode === 0,
+      stdout,
+      stderr,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

@@ -117,18 +117,29 @@ else
   log "Bun already installed: $(bun --version)"
 fi
 
-# ─── Step 3/7: Install Docker ───────────────────────────────────────────────
+# ─── Step 3/7: Install PM2 ───────────────────────────────────────────────────
 
-log_section "Step 3/7: Checking Docker"
+log_section "Step 3/7: Checking PM2"
 
-if ! command -v docker >/dev/null 2>&1; then
-  log "Installing Docker..."
-  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
-  systemctl enable docker >/dev/null 2>&1
-  systemctl start docker >/dev/null 2>&1
-  log "Docker installed: $(docker --version)"
+if ! command -v pm2 >/dev/null 2>&1; then
+  log "Installing PM2..."
+  if command -v npm >/dev/null 2>&1; then
+    npm install -g pm2 >/dev/null 2>&1
+  elif command -v bun >/dev/null 2>&1; then
+    bun install -g pm2 >/dev/null 2>&1
+  else
+    log "WARNING: Neither npm nor bun available to install PM2"
+  fi
+
+  if command -v pm2 >/dev/null 2>&1; then
+    log "PM2 installed: $(pm2 --version)"
+    # Set up PM2 startup script for auto-restart on boot
+    pm2 startup >/dev/null 2>&1 || true
+  else
+    log "WARNING: PM2 installation failed. Install manually: npm install -g pm2"
+  fi
 else
-  log "Docker already installed: $(docker --version)"
+  log "PM2 already installed: $(pm2 --version)"
 fi
 
 # ─── Step 4/7: Install Caddy ────────────────────────────────────────────────
@@ -254,8 +265,8 @@ log_section "Step 7/7: Starting PanelKit"
 cat > /etc/systemd/system/panelkit.service << EOF
 [Unit]
 Description=PanelKit — Server Management Platform
-After=network.target docker.service caddy.service
-Wants=docker.service caddy.service
+After=network.target caddy.service
+Wants=caddy.service
 
 [Service]
 Type=simple

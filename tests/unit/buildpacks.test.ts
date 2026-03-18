@@ -72,99 +72,88 @@ describe("Runtime Detection", () => {
     const result = await detectRuntime(tempDir);
     expect(result.runtime).toBe("unknown");
     expect(result.detectedBy).toBeNull();
-    expect(result.dockerfile).toBeNull();
-  });
-
-  it("prefers explicit Dockerfile over auto-detection", async () => {
-    writeFile("Dockerfile", "FROM node:20\n");
-    writeFile("package.json", "{}");
-
-    const result = await detectRuntime(tempDir);
-    expect(result.runtime).toBe("dockerfile");
-    expect(result.detectedBy).toBe("Dockerfile");
-    expect(result.dockerfile).toBeNull(); // Don't generate if one exists
+    expect(result.installCommand).toBeNull();
+    expect(result.startCommand).toBeNull();
   });
 });
 
-describe("Dockerfile Generation", () => {
-  it("generated Node.js Dockerfile is valid", async () => {
-    writeFile("package.json", '{"name":"test"}');
+describe("Runtime Commands", () => {
+  it("Node.js returns install and start commands", async () => {
+    writeFile("package.json", '{"name":"test","scripts":{"start":"node server.js"}}');
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toBeDefined();
-    expect(result.dockerfile).toContain("FROM");
-    expect(result.dockerfile).toContain("EXPOSE");
-    expect(result.dockerfile).toContain("WORKDIR");
+    expect(result.installCommand).toBeDefined();
+    expect(result.startCommand).toBeDefined();
+    expect(result.defaultPort).toBe(3000);
   });
 
-  it("Node.js uses npm when package-lock.json present", async () => {
-    writeFile("package.json", "{}");
-    writeFile("package-lock.json", "{}");
-
+  it("Node.js uses npm install by default", async () => {
+    writeFile("package.json", '{"name":"test"}');
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("npm ci");
+    expect(result.installCommand).toContain("npm install");
   });
 
   it("Node.js uses yarn when yarn.lock present", async () => {
     writeFile("package.json", "{}");
     writeFile("yarn.lock", "");
-
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("yarn install");
+    expect(result.installCommand).toContain("yarn install");
   });
 
   it("Node.js uses pnpm when pnpm-lock.yaml present", async () => {
     writeFile("package.json", "{}");
     writeFile("pnpm-lock.yaml", "");
-
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("pnpm install");
+    expect(result.installCommand).toContain("pnpm install");
   });
 
   it("Node.js uses bun when bun.lockb present", async () => {
     writeFile("package.json", "{}");
     writeFile("bun.lockb", "");
-
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("bun install");
-    expect(result.dockerfile).toContain("oven/bun");
+    expect(result.installCommand).toContain("bun install");
   });
 
-  it("Python Dockerfile uses pip for requirements.txt", async () => {
+  it("Python uses pip for requirements.txt", async () => {
     writeFile("requirements.txt", "flask\n");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("pip install");
-    expect(result.dockerfile).toContain("requirements.txt");
+    expect(result.installCommand).toContain("pip install");
+    expect(result.installCommand).toContain("requirements.txt");
+    expect(result.startCommand).toContain("python");
+    expect(result.defaultPort).toBe(8000);
   });
 
-  it("Python Dockerfile uses poetry for pyproject.toml", async () => {
+  it("Python uses poetry for pyproject.toml", async () => {
     writeFile("pyproject.toml", "[tool.poetry]");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("poetry");
+    expect(result.installCommand).toContain("poetry");
   });
 
-  it("Python Dockerfile uses pipenv for Pipfile", async () => {
+  it("Python uses pipenv for Pipfile", async () => {
     writeFile("Pipfile", "[[source]]");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("pipenv");
+    expect(result.installCommand).toContain("pipenv");
   });
 
-  it("Go Dockerfile uses multi-stage build", async () => {
+  it("Go returns build command", async () => {
     writeFile("go.mod", "module example.com/app");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("AS builder");
-    expect(result.dockerfile).toContain("CGO_ENABLED=0");
-    expect(result.dockerfile).toContain("COPY --from=builder");
+    expect(result.installCommand).toContain("go build");
+    expect(result.startCommand).toBe("./server");
+    expect(result.defaultPort).toBe(8080);
   });
 
-  it("PHP Dockerfile uses composer", async () => {
+  it("PHP uses composer", async () => {
     writeFile("composer.json", "{}");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("composer");
+    expect(result.installCommand).toContain("composer install");
+    expect(result.defaultPort).toBe(80);
   });
 
-  it("Static Dockerfile uses nginx", async () => {
+  it("Static site has no install command", async () => {
     writeFile("index.html", "<html></html>");
     const result = await detectRuntime(tempDir);
-    expect(result.dockerfile).toContain("nginx");
+    expect(result.installCommand).toBeNull();
+    expect(result.startCommand).toBeDefined();
+    expect(result.defaultPort).toBe(80);
   });
 });

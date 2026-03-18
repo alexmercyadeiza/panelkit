@@ -71,7 +71,7 @@ export const apps = sqliteTable("apps", {
     .default("created"),
   deployMode: text("deploy_mode", { enum: ["docker", "pm2"] })
     .notNull()
-    .default("docker"),
+    .default("pm2"),
   containerId: text("container_id"),
   currentDeploymentId: text("current_deployment_id"),
   autoDeployEnabled: integer("auto_deploy_enabled", { mode: "boolean" })

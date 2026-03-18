@@ -13,7 +13,6 @@ import { FirewallPage } from "./pages/Firewall";
 import { BackupsPage } from "./pages/Backups";
 import { UsersPage } from "./pages/Users";
 import { SettingsPage } from "./pages/Settings";
-import { DockerPage } from "./pages/Docker";
 import { TerminalPage } from "./pages/Terminal";
 import { Layout } from "./components/layout/Layout";
 
@@ -25,7 +24,6 @@ const PAGE_TITLES: Record<string, string> = {
   "/storage": "Storage",
   "/cron": "Cron Jobs",
   "/processes": "Processes",
-  "/docker": "Docker",
   "/firewall": "Firewall",
   "/backups": "Backups",
   "/terminal": "Terminal",
@@ -121,9 +119,6 @@ export function App() {
       break;
     case "/settings":
       page = <SettingsPage />;
-      break;
-    case "/docker":
-      page = <DockerPage />;
       break;
     case "/terminal":
       page = <TerminalPage />;

@@ -1,4 +1,4 @@
-// ─── Buildpack Detection & Dockerfile Generation ────────────────────────────
+// ─── Buildpack Detection & Runtime Commands ──────────────────────────────────
 
 import { join } from "path";
 
@@ -8,177 +8,170 @@ export type Runtime =
   | "go"
   | "php"
   | "static"
-  | "dockerfile"
   | "unknown";
 
 export interface DetectionResult {
   runtime: Runtime;
   /** The file that triggered detection */
   detectedBy: string | null;
-  /** Generated Dockerfile content (null if runtime is "dockerfile" or "unknown") */
-  dockerfile: string | null;
+  /** Command to install dependencies */
+  installCommand: string | null;
+  /** Command to start the application */
+  startCommand: string | null;
+  /** Default port the app listens on */
+  defaultPort: number;
 }
 
 /**
  * Detect the runtime of a project by examining files in the given directory.
- * If a Dockerfile already exists, prefer it.
+ * Returns install and start commands for PM2-based deployment.
  */
 export async function detectRuntime(dir: string): Promise<DetectionResult> {
-  // 1. Check for explicit Dockerfile first
-  if (await fileExists(join(dir, "Dockerfile"))) {
+  // 1. Node.js — package.json
+  if (await fileExists(join(dir, "package.json"))) {
+    const commands = await getNodeCommands(dir);
     return {
-      runtime: "dockerfile",
-      detectedBy: "Dockerfile",
-      dockerfile: null,
+      runtime: "nodejs",
+      detectedBy: "package.json",
+      installCommand: commands.install,
+      startCommand: commands.start,
+      defaultPort: 3000,
     };
   }
 
-  // 2. Node.js — package.json
-  if (await fileExists(join(dir, "package.json"))) {
-    const dockerfile = await generateNodeDockerfile(dir);
-    return { runtime: "nodejs", detectedBy: "package.json", dockerfile };
-  }
-
-  // 3. Python — requirements.txt, pyproject.toml, Pipfile
-  for (const file of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
+  // 2. Python — requirements.txt, pyproject.toml, Pipfile
+  for (const file of ["requirements.txt", "pyproject.toml", "Pipfile"] as const) {
     if (await fileExists(join(dir, file))) {
-      const dockerfile = generatePythonDockerfile(file);
-      return { runtime: "python", detectedBy: file, dockerfile };
+      const commands = getPythonCommands(file);
+      return {
+        runtime: "python",
+        detectedBy: file,
+        installCommand: commands.install,
+        startCommand: commands.start,
+        defaultPort: 8000,
+      };
     }
   }
 
-  // 4. Go — go.mod
+  // 3. Go — go.mod
   if (await fileExists(join(dir, "go.mod"))) {
-    const dockerfile = generateGoDockerfile();
-    return { runtime: "go", detectedBy: "go.mod", dockerfile };
+    return {
+      runtime: "go",
+      detectedBy: "go.mod",
+      installCommand: "go build -o server .",
+      startCommand: "./server",
+      defaultPort: 8080,
+    };
   }
 
-  // 5. PHP — composer.json
+  // 4. PHP — composer.json
   if (await fileExists(join(dir, "composer.json"))) {
-    const dockerfile = generatePhpDockerfile();
-    return { runtime: "php", detectedBy: "composer.json", dockerfile };
+    return {
+      runtime: "php",
+      detectedBy: "composer.json",
+      installCommand: "composer install --no-dev --optimize-autoloader",
+      startCommand: "php -S 0.0.0.0:80 -t .",
+      defaultPort: 80,
+    };
   }
 
-  // 6. Static site — index.html
+  // 5. Static site — index.html
   if (await fileExists(join(dir, "index.html"))) {
-    const dockerfile = generateStaticDockerfile();
-    return { runtime: "static", detectedBy: "index.html", dockerfile };
+    return {
+      runtime: "static",
+      detectedBy: "index.html",
+      installCommand: null,
+      startCommand: "npx serve -s . -l 80",
+      defaultPort: 80,
+    };
   }
 
-  // 7. Unknown
-  return { runtime: "unknown", detectedBy: null, dockerfile: null };
+  // 6. Unknown
+  return {
+    runtime: "unknown",
+    detectedBy: null,
+    installCommand: null,
+    startCommand: null,
+    defaultPort: 3000,
+  };
 }
 
-// ─── Node.js Dockerfile Generation ──────────────────────────────────────────
+// ─── Node.js Commands ────────────────────────────────────────────────────────
 
-async function generateNodeDockerfile(dir: string): Promise<string> {
+async function getNodeCommands(
+  dir: string
+): Promise<{ install: string; start: string }> {
   const lockfile = await detectNodeLockfile(dir);
 
   const installCmd = {
-    npm: "npm ci --only=production",
-    yarn: "yarn install --frozen-lockfile --production",
-    pnpm: "pnpm install --frozen-lockfile --prod",
-    bun: "bun install --frozen-lockfile --production",
+    npm: "npm install",
+    yarn: "yarn install --frozen-lockfile",
+    pnpm: "pnpm install --frozen-lockfile",
+    bun: "bun install",
   }[lockfile];
 
-  const copyLock = {
-    npm: "COPY package.json package-lock.json* ./",
-    yarn: "COPY package.json yarn.lock* ./",
-    pnpm: "COPY package.json pnpm-lock.yaml* ./",
-    bun: "COPY package.json bun.lockb* bun.lock* ./",
-  }[lockfile];
+  // Try to read package.json for the start script
+  let startCmd: string;
+  try {
+    const pkg = await Bun.file(join(dir, "package.json")).json();
+    if (pkg.scripts?.start) {
+      startCmd =
+        lockfile === "bun"
+          ? "bun start"
+          : lockfile === "pnpm"
+            ? "pnpm start"
+            : lockfile === "yarn"
+              ? "yarn start"
+              : "npm start";
+    } else if (pkg.main) {
+      startCmd = lockfile === "bun" ? `bun ${pkg.main}` : `node ${pkg.main}`;
+    } else {
+      startCmd = lockfile === "bun" ? "bun index.js" : "node index.js";
+    }
+  } catch {
+    startCmd = lockfile === "bun" ? "bun start" : "npm start";
+  }
 
-  const baseImage = lockfile === "bun" ? "oven/bun:1-alpine" : "node:20-alpine";
-  const startCmd = lockfile === "bun" ? 'CMD ["bun", "start"]' : 'CMD ["node", "index.js"]';
-
-  return `FROM ${baseImage}
-WORKDIR /app
-${copyLock}
-RUN ${installCmd}
-COPY . .
-EXPOSE 3000
-${startCmd}
-`;
+  return { install: installCmd, start: startCmd };
 }
 
 type NodePkgManager = "npm" | "yarn" | "pnpm" | "bun";
 
 async function detectNodeLockfile(dir: string): Promise<NodePkgManager> {
-  if (await fileExists(join(dir, "bun.lockb")) || await fileExists(join(dir, "bun.lock"))) return "bun";
+  if (
+    (await fileExists(join(dir, "bun.lockb"))) ||
+    (await fileExists(join(dir, "bun.lock")))
+  )
+    return "bun";
   if (await fileExists(join(dir, "pnpm-lock.yaml"))) return "pnpm";
   if (await fileExists(join(dir, "yarn.lock"))) return "yarn";
   return "npm";
 }
 
-// ─── Python Dockerfile Generation ───────────────────────────────────────────
+// ─── Python Commands ─────────────────────────────────────────────────────────
 
-function generatePythonDockerfile(detectedBy: string): string {
-  let installLines: string;
-
+function getPythonCommands(
+  detectedBy: string
+): { install: string; start: string } {
   switch (detectedBy) {
     case "pyproject.toml":
-      installLines = `COPY pyproject.toml ./
-RUN pip install --no-cache-dir poetry && poetry config virtualenvs.create false && poetry install --no-dev --no-interaction`;
-      break;
+      return {
+        install:
+          "pip install --no-cache-dir poetry && poetry config virtualenvs.create false && poetry install --no-dev --no-interaction",
+        start: "python app.py",
+      };
     case "Pipfile":
-      installLines = `COPY Pipfile Pipfile.lock* ./
-RUN pip install --no-cache-dir pipenv && pipenv install --system --deploy`;
-      break;
+      return {
+        install:
+          "pip install --no-cache-dir pipenv && pipenv install --system --deploy",
+        start: "python app.py",
+      };
     default: // requirements.txt
-      installLines = `COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt`;
-      break;
+      return {
+        install: "pip install --no-cache-dir -r requirements.txt",
+        start: "python app.py",
+      };
   }
-
-  return `FROM python:3.12-slim
-WORKDIR /app
-${installLines}
-COPY . .
-EXPOSE 8000
-CMD ["python", "app.py"]
-`;
-}
-
-// ─── Go Dockerfile Generation ───────────────────────────────────────────────
-
-function generateGoDockerfile(): string {
-  return `FROM golang:1.22-alpine AS builder
-WORKDIR /app
-COPY go.mod go.sum* ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server .
-
-FROM alpine:3.19
-WORKDIR /app
-COPY --from=builder /app/server .
-EXPOSE 8080
-CMD ["./server"]
-`;
-}
-
-// ─── PHP Dockerfile Generation ──────────────────────────────────────────────
-
-function generatePhpDockerfile(): string {
-  return `FROM php:8.3-apache
-WORKDIR /var/www/html
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-COPY composer.json composer.lock* ./
-RUN composer install --no-dev --optimize-autoloader
-COPY . .
-RUN chown -R www-data:www-data /var/www/html
-EXPOSE 80
-`;
-}
-
-// ─── Static Site Dockerfile Generation ──────────────────────────────────────
-
-function generateStaticDockerfile(): string {
-  return `FROM nginx:alpine
-COPY . /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

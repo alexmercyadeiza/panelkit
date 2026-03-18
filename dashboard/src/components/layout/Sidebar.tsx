@@ -86,19 +86,6 @@ const navItems: NavItem[] = [
     ),
   },
   {
-    label: "Docker",
-    path: "/docker",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="2" y="6" width="20" height="12" rx="2" />
-        <path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" />
-        <line x1="12" y1="10" x2="12" y2="14" />
-        <line x1="8" y1="10" x2="8" y2="14" />
-        <line x1="16" y1="10" x2="16" y2="14" />
-      </svg>
-    ),
-  },
-  {
     label: "Firewall",
     path: "/firewall",
     icon: (
@@ -211,12 +198,10 @@ export function Sidebar({ currentPath, onNavigate }: Props) {
           <div className="space-y-0.5">
             {navItems.map((item) => {
               const isActive = currentPath === item.path;
-              const isDisabled = item.path === "/docker";
               return (
                 <button
                   key={item.path}
                   onClick={() => {
-                    if (isDisabled) return;
                     onNavigate(item.path);
                     setMobileOpen(false);
                   }}
@@ -225,16 +210,14 @@ export function Sidebar({ currentPath, onNavigate }: Props) {
                     transition-colors duration-100
                     ${collapsed ? "justify-center px-2 py-2" : "px-2.5 py-[7px]"}
                     ${
-                      isDisabled
-                        ? "text-zinc-600 cursor-default"
-                        : isActive
-                          ? "bg-white/5 text-white"
-                          : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                      isActive
+                        ? "bg-white/5 text-white"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
                     }
                   `}
                   title={collapsed ? item.label : undefined}
                 >
-                  <span className={`shrink-0 ${isDisabled ? "text-zinc-700" : isActive ? "text-blue-400" : "text-zinc-500 group-hover:text-zinc-400"}`}>
+                  <span className={`shrink-0 ${isActive ? "text-blue-400" : "text-zinc-500 group-hover:text-zinc-400"}`}>
                     {item.icon}
                   </span>
                   {!collapsed && <span className="truncate">{item.label}</span>}
