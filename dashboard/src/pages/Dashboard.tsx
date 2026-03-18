@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { MetricCard } from "../components/ui/MetricCard";
 
@@ -39,15 +39,43 @@ function formatBytes(gb: number): string {
 
 function MiniBarChart({ bars, color }: { bars: number[]; color: string }) {
   const max = Math.max(...bars, 1);
+  const [tooltip, setTooltip] = useState<{ index: number; value: number; x: number; y: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   return (
-    <div className="flex items-end gap-[3px] h-10">
+    <div className="flex items-end gap-[3px] h-10 relative" ref={containerRef}>
       {bars.map((v, i) => (
         <div
           key={i}
-          className={`flex-1 rounded-sm min-w-[3px] ${color}`}
+          className={`flex-1 rounded-sm min-w-[3px] ${color} cursor-pointer transition-opacity hover:opacity-80`}
           style={{ height: `${Math.max((v / max) * 100, 6)}%` }}
+          onMouseEnter={(e) => {
+            const rect = (e.target as HTMLElement).getBoundingClientRect();
+            const containerRect = containerRef.current?.getBoundingClientRect();
+            if (containerRect) {
+              setTooltip({
+                index: i,
+                value: v,
+                x: rect.left - containerRect.left + rect.width / 2,
+                y: rect.top - containerRect.top,
+              });
+            }
+          }}
+          onMouseLeave={() => setTooltip(null)}
         />
       ))}
+      {tooltip && (
+        <div
+          className="absolute bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-mono-code px-2 py-1 rounded shadow-lg pointer-events-none whitespace-nowrap z-10"
+          style={{
+            left: `${tooltip.x}px`,
+            top: `${tooltip.y - 8}px`,
+            transform: "translate(-50%, -100%)",
+          }}
+        >
+          {typeof tooltip.value === "number" ? tooltip.value.toFixed(1) : tooltip.value}
+        </div>
+      )}
     </div>
   );
 }
@@ -81,6 +109,60 @@ function PerformanceCard({
   );
 }
 
+function useStatsWebSocket(onStats: (stats: ServerStats) => void) {
+  const [isLive, setIsLive] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const connect = useCallback(() => {
+    // Build WebSocket URL: use same host as page, ws/wss based on protocol
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${window.location.host}/ws/stats`;
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setIsLive(true);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as ServerStats;
+        onStats(data);
+      } catch {
+        // Ignore malformed messages
+      }
+    };
+
+    ws.onclose = () => {
+      setIsLive(false);
+      wsRef.current = null;
+      // Auto-reconnect after 3 seconds
+      reconnectTimerRef.current = setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {
+      // onclose will fire after onerror, triggering reconnect
+    };
+  }, [onStats]);
+
+  useEffect(() => {
+    connect();
+
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [connect]);
+
+  return isLive;
+}
+
 export function DashboardPage({ user }: Props) {
   const [stats, setStats] = useState<ServerStats>(MOCK_STATS);
   const [appCount, setAppCount] = useState(0);
@@ -89,9 +171,18 @@ export function DashboardPage({ user }: Props) {
   const [deployments] = useState<Deployment[]>([]);
   const [loaded, setLoaded] = useState(false);
 
+  // Stable callback ref for WebSocket updates
+  const setStatsRef = useRef(setStats);
+  setStatsRef.current = setStats;
+  const handleStatsUpdate = useCallback((data: ServerStats) => {
+    setStatsRef.current(data);
+  }, []);
+
+  const isLive = useStatsWebSocket(handleStatsUpdate);
+
   useEffect(() => {
     async function fetchData() {
-      // Fetch server stats
+      // Fetch server stats as fallback (WebSocket will override)
       try {
         const data = await api<ServerStats>("/stats/server");
         setStats(data);
@@ -137,13 +228,26 @@ export function DashboardPage({ user }: Props) {
   return (
     <div className="space-y-6">
       {/* Welcome */}
-      <div>
-        <h2 className="text-xl font-semibold text-white">
-          Welcome back, {user.username}
-        </h2>
-        <p className="text-sm text-zinc-500 mt-1">
-          Here's an overview of your server.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-white">
+            Welcome back, {user.username}
+          </h2>
+          <p className="text-sm text-zinc-500 mt-1">
+            Here's an overview of your server.
+          </p>
+        </div>
+        {/* Live indicator */}
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-block w-2 h-2 rounded-full ${
+              isLive ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" : "bg-zinc-600"
+            }`}
+          />
+          <span className={`text-xs font-medium ${isLive ? "text-emerald-400" : "text-zinc-500"}`}>
+            {isLive ? "Live" : "Offline"}
+          </span>
+        </div>
       </div>
 
       {/* Server metrics row */}
@@ -171,8 +275,8 @@ export function DashboardPage({ user }: Props) {
         />
         <MetricCard
           label="Network"
-          value={`${stats.network.rx} MB/s`}
-          subtitle={`TX: ${stats.network.tx} MB/s`}
+          value={`Received: ${stats.network.rx} MB`}
+          subtitle={`Sent: ${stats.network.tx} MB`}
           trend={{ value: 12, label: "vs last hr" }}
           bars={[8, 10, 12, 9, 11, 14, stats.network.rx, 10, 13, 11, 9, stats.network.rx]}
         />

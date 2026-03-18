@@ -4,6 +4,7 @@ import { Button } from "../components/ui/Button";
 import { DataTable } from "../components/ui/DataTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -143,17 +144,14 @@ function AddDomainForm({
               No apps available. Create an app first.
             </p>
           ) : (
-            <select
+            <Select
               value={appId}
-              onChange={(e) => setAppId(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            >
-              {apps.map((app) => (
-                <option key={app.id} value={app.id}>
-                  {app.name}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setAppId(v)}
+              options={apps.map((app) => ({
+                value: app.id,
+                label: app.name,
+              }))}
+            />
           )}
         </div>
 

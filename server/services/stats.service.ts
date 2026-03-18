@@ -347,3 +347,104 @@ export async function collectServerStats(): Promise<ServerStats> {
 export function resetCpuSnapshot(): void {
   _prevCpuContent = null;
 }
+
+// ─── Shared Helpers (used by routes and WebSocket handlers) ──────────────────
+
+/**
+ * Get disk space usage by running `df -BG /` and parsing the output.
+ * Returns used/total in GB and percent, or defaults if the command fails.
+ */
+export async function getDiskSpace(): Promise<{
+  used: number;
+  total: number;
+  percent: number;
+}> {
+  try {
+    const proc = Bun.spawn(["df", "-BG", "/"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const lines = output.trim().split("\n");
+    if (lines.length < 2) return { used: 0, total: 0, percent: 0 };
+
+    const parts = lines[1].trim().split(/\s+/);
+    if (parts.length < 5) return { used: 0, total: 0, percent: 0 };
+
+    const total = parseInt(parts[1], 10) || 0;
+    const used = parseInt(parts[2], 10) || 0;
+    const percentStr = parts[4]?.replace("%", "") || "0";
+    const percent = parseInt(percentStr, 10) || 0;
+
+    return { used, total, percent };
+  } catch {
+    return { used: 0, total: 0, percent: 0 };
+  }
+}
+
+/**
+ * Read system uptime from /proc/uptime (seconds since boot).
+ * Falls back to process.uptime() if /proc is unavailable.
+ */
+export async function getUptime(): Promise<number> {
+  try {
+    const content = await readFile("/proc/uptime", "utf-8");
+    const seconds = parseFloat(content.split(/\s+/)[0]);
+    if (!isNaN(seconds)) return Math.floor(seconds);
+  } catch {
+    // fall through
+  }
+  return Math.floor(process.uptime());
+}
+
+// Track whether we've primed the CPU snapshot for transformed stats
+let _transformCpuPrimed = false;
+
+/**
+ * Transform raw collectServerStats() output into the shape the dashboard expects:
+ * { cpu, memory: { used, total, percent }, disk: { used, total, percent },
+ *   network: { rx, tx }, uptime }
+ */
+export async function getTransformedStats() {
+  let raw = await collectServerStats();
+
+  // CPU requires two snapshots to compute a delta. On the very first call,
+  // cpu will be null. Prime it by collecting again after a short delay.
+  if (!_transformCpuPrimed) {
+    _transformCpuPrimed = true;
+    if (raw.cpu === null) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      raw = await collectServerStats();
+    }
+  }
+
+  // CPU -> single number (percentage)
+  const cpu = raw.cpu?.usagePercent ?? 0;
+
+  // Memory -> { used (GB), total (GB), percent }
+  const memory = {
+    used: raw.memory ? Math.round((raw.memory.usedMb / 1024) * 100) / 100 : 0,
+    total: raw.memory
+      ? Math.round((raw.memory.totalMb / 1024) * 100) / 100
+      : 0,
+    percent: raw.memory?.usagePercent ?? 0,
+  };
+
+  // Disk -> actual disk space usage via `df`
+  const disk = await getDiskSpace();
+
+  // Network -> sum all interface bytes, convert to MB
+  const networkRxBytes = raw.network.reduce((sum, n) => sum + n.rxBytes, 0);
+  const networkTxBytes = raw.network.reduce((sum, n) => sum + n.txBytes, 0);
+  const network = {
+    rx: Math.round((networkRxBytes / (1024 * 1024)) * 100) / 100,
+    tx: Math.round((networkTxBytes / (1024 * 1024)) * 100) / 100,
+  };
+
+  // Uptime -> seconds
+  const uptime = await getUptime();
+
+  return { cpu, memory, disk, network, uptime };
+}

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { api, ApiError } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,17 +126,15 @@ function AddRuleForm({
             <label className="block text-sm font-medium text-zinc-300 mb-1.5">
               Protocol
             </label>
-            <select
+            <Select
               value={protocol}
-              onChange={(e) =>
-                setProtocol(e.target.value as "tcp" | "udp" | "any")
-              }
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="any">Both (TCP/UDP)</option>
-              <option value="tcp">TCP</option>
-              <option value="udp">UDP</option>
-            </select>
+              onChange={(v) => setProtocol(v as "tcp" | "udp" | "any")}
+              options={[
+                { value: "any", label: "Both (TCP/UDP)" },
+                { value: "tcp", label: "TCP" },
+                { value: "udp", label: "UDP" },
+              ]}
+            />
           </div>
         </div>
 

@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { DataTable } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -162,16 +163,14 @@ function CreateDatabaseForm({
           <label className="block text-sm font-medium text-zinc-300 mb-1.5">
             Database Type
           </label>
-          <select
+          <Select
             value={type}
-            onChange={(e) =>
-              setType(e.target.value as "mysql" | "postgresql")
-            }
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-          >
-            <option value="postgresql">PostgreSQL</option>
-            <option value="mysql">MySQL</option>
-          </select>
+            onChange={(v) => setType(v as "mysql" | "postgresql")}
+            options={[
+              { value: "postgresql", label: "PostgreSQL" },
+              { value: "mysql", label: "MySQL" },
+            ]}
+          />
         </div>
 
         <div className="pt-2">

@@ -7,7 +7,6 @@ import { AppsPage } from "./pages/Apps";
 import { DatabasesPage } from "./pages/Databases";
 import { StoragePage } from "./pages/Storage";
 import { DomainsPage } from "./pages/Domains";
-import { MonitoringPage } from "./pages/Monitoring";
 import { CronJobsPage } from "./pages/CronJobs";
 import { ProcessesPage } from "./pages/Processes";
 import { FirewallPage } from "./pages/Firewall";
@@ -26,7 +25,6 @@ const PAGE_TITLES: Record<string, string> = {
   "/storage": "Storage",
   "/cron": "Cron Jobs",
   "/processes": "Processes",
-  "/monitoring": "Monitoring",
   "/docker": "Docker",
   "/firewall": "Firewall",
   "/backups": "Backups",
@@ -105,9 +103,6 @@ export function App() {
       break;
     case "/domains":
       page = <DomainsPage />;
-      break;
-    case "/monitoring":
-      page = <MonitoringPage />;
       break;
     case "/cron":
       page = <CronJobsPage />;

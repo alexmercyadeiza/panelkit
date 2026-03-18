@@ -3,6 +3,7 @@ import { api, ApiError } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -201,17 +202,17 @@ function CronJobForm({
             </div>
             <div>
               <label className="block text-sm font-medium text-zinc-300 mb-1.5">Method</label>
-              <select
+              <Select
                 value={httpMethod}
-                onChange={(e) => setHttpMethod(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="GET">GET</option>
-                <option value="POST">POST</option>
-                <option value="PUT">PUT</option>
-                <option value="DELETE">DELETE</option>
-                <option value="PATCH">PATCH</option>
-              </select>
+                onChange={(v) => setHttpMethod(v)}
+                options={[
+                  { value: "GET", label: "GET" },
+                  { value: "POST", label: "POST" },
+                  { value: "PUT", label: "PUT" },
+                  { value: "DELETE", label: "DELETE" },
+                  { value: "PATCH", label: "PATCH" },
+                ]}
+              />
             </div>
           </div>
         )}

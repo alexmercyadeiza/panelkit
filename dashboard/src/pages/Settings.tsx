@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api, ApiError } from "../api/client";
 import { Button } from "../components/ui/Button";
+import { Select } from "../components/ui/Select";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,17 +100,15 @@ function AddChannelForm({
             <label className="block text-sm font-medium text-zinc-300 mb-1.5">
               Type
             </label>
-            <select
+            <Select
               value={type}
-              onChange={(e) =>
-                setType(e.target.value as "slack" | "discord" | "email")
-              }
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="slack">Slack</option>
-              <option value="discord">Discord</option>
-              <option value="email">Email (SMTP)</option>
-            </select>
+              onChange={(v) => setType(v as "slack" | "discord" | "email")}
+              options={[
+                { value: "slack", label: "Slack" },
+                { value: "discord", label: "Discord" },
+                { value: "email", label: "Email (SMTP)" },
+              ]}
+            />
           </div>
         </div>
 
