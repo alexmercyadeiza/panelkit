@@ -13,6 +13,18 @@ interface NotificationChannel {
   config: Record<string, unknown>;
 }
 
+interface GitHubUser {
+  login: string;
+  avatarUrl: string;
+  name: string | null;
+}
+
+interface GitHubStatus {
+  connected: boolean;
+  configured: boolean;
+  user?: GitHubUser;
+}
+
 // ─── Add Channel Form ───────────────────────────────────────────────────────
 
 function AddChannelForm({
@@ -226,6 +238,46 @@ export function SettingsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  // GitHub state
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
+  const [githubLoading, setGithubLoading] = useState(true);
+  const [githubDisconnecting, setGithubDisconnecting] = useState(false);
+  const [githubConnecting, setGithubConnecting] = useState(false);
+
+  const fetchGitHubStatus = useCallback(async () => {
+    setGithubLoading(true);
+    try {
+      const data = await api<GitHubStatus>("/github/status");
+      setGithubStatus(data);
+    } catch {
+      setGithubStatus(null);
+    } finally {
+      setGithubLoading(false);
+    }
+  }, []);
+
+  const handleGitHubConnect = async () => {
+    setGithubConnecting(true);
+    try {
+      const data = await api<{ url: string }>("/github/authorize");
+      window.location.href = data.url;
+    } catch {
+      setGithubConnecting(false);
+    }
+  };
+
+  const handleGitHubDisconnect = async () => {
+    setGithubDisconnecting(true);
+    try {
+      await api("/github/disconnect", { method: "POST" });
+      setGithubStatus({ connected: false, configured: true });
+    } catch {
+      // ignore
+    } finally {
+      setGithubDisconnecting(false);
+    }
+  };
+
   const fetchChannels = useCallback(async () => {
     setChannelsLoading(true);
     try {
@@ -242,7 +294,8 @@ export function SettingsPage() {
 
   useEffect(() => {
     fetchChannels();
-  }, [fetchChannels]);
+    fetchGitHubStatus();
+  }, [fetchChannels, fetchGitHubStatus]);
 
   const handleTestChannel = async (id: string) => {
     setTestingId(id);
@@ -337,6 +390,80 @@ export function SettingsPage() {
               Coming Soon
             </span>
           </div>
+        </div>
+      </section>
+
+      {/* GitHub Integration Section */}
+      <section>
+        <h2 className="text-lg font-semibold text-white mb-1">GitHub</h2>
+        <p className="text-sm text-zinc-500 mb-4">
+          Connect your GitHub account to deploy private repositories
+        </p>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+          {githubLoading ? (
+            <p className="text-sm text-zinc-500">
+              Checking GitHub connection...
+            </p>
+          ) : githubStatus?.connected && githubStatus.user ? (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <img
+                  src={githubStatus.user.avatarUrl}
+                  alt={githubStatus.user.login}
+                  className="w-10 h-10 rounded-full border border-zinc-700"
+                />
+                <div>
+                  <h3 className="text-sm font-medium text-white">
+                    {githubStatus.user.name || githubStatus.user.login}
+                  </h3>
+                  <p className="text-xs text-zinc-500">
+                    @{githubStatus.user.login}
+                  </p>
+                </div>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400">
+                  Connected
+                </span>
+              </div>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={handleGitHubDisconnect}
+                loading={githubDisconnecting}
+              >
+                Disconnect
+              </Button>
+            </div>
+          ) : githubStatus?.configured === false ? (
+            <div>
+              <p className="text-sm text-zinc-400 mb-1">
+                GitHub OAuth is not configured
+              </p>
+              <p className="text-xs text-zinc-600">
+                Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment
+                variables to enable GitHub integration.
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-medium text-zinc-200">
+                  Connect GitHub Account
+                </h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Authorize PanelKit to access your repositories for seamless
+                  deployments
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleGitHubConnect}
+                loading={githubConnecting}
+              >
+                Connect GitHub
+              </Button>
+            </div>
+          )}
         </div>
       </section>
 

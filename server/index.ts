@@ -19,6 +19,7 @@ import { firewallRoutes } from "./routes/firewall.routes";
 import { usersRoutes } from "./routes/users.routes";
 import { backupsRoutes } from "./routes/backups.routes";
 import { notificationsRoutes } from "./routes/notifications.routes";
+import { githubRoutes } from "./routes/github.routes";
 import { DeployError } from "./services/deploy.service";
 import { getTransformedStats } from "./services/stats.service";
 import type { ServerWebSocket } from "bun";
@@ -69,6 +70,7 @@ app.route("/api/firewall", firewallRoutes);
 app.route("/api/users", usersRoutes);
 app.route("/api/backups", backupsRoutes);
 app.route("/api/notifications", notificationsRoutes);
+app.route("/api/github", githubRoutes);
 
 // Health check
 app.get("/api/health", (c) =>
@@ -161,6 +163,7 @@ export function createApp(dbPath?: string) {
   testApp.route("/api/users", usersRoutes);
   testApp.route("/api/backups", backupsRoutes);
   testApp.route("/api/notifications", notificationsRoutes);
+  testApp.route("/api/github", githubRoutes);
 
   testApp.get("/api/health", (c) =>
     c.json({

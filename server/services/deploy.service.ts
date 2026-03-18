@@ -16,6 +16,10 @@ import { detectRuntime } from "../lib/buildpacks";
 import { allocatePort, releasePort } from "../lib/port-manager";
 import { getConfig } from "../config";
 import { join } from "path";
+import {
+  getGitHubToken,
+  getAuthenticatedCloneUrl,
+} from "./github.service";
 
 // ─── Deploy Queue ───────────────────────────────────────────────────────────
 
@@ -112,6 +116,23 @@ async function executeDeploy(
     const repoDir = getAppRepoDir(appId);
     logs.push(`[deploy] Repo dir: ${repoDir}`);
 
+    // Resolve clone URL — inject GitHub token for github.com URLs if available
+    let effectiveRepoUrl = app.repoUrl;
+    const isGitHubUrl = app.repoUrl.includes("github.com");
+
+    if (isGitHubUrl) {
+      try {
+        const ghToken = await getGitHubToken(db);
+        if (ghToken) {
+          effectiveRepoUrl = getAuthenticatedCloneUrl(app.repoUrl, ghToken);
+          logs.push("[deploy] Using authenticated GitHub clone URL");
+        }
+      } catch {
+        // Proceed without token — will work for public repos
+        logs.push("[deploy] No GitHub token available, using unauthenticated clone");
+      }
+    }
+
     // Ensure apps directory exists
     const appsDir = getAppsDir();
     await ensureDir(appsDir);
@@ -133,7 +154,7 @@ async function executeDeploy(
         // Try fresh clone
         await cleanupDir(repoDir);
         const cloneResult = await cloneRepo({
-          repoUrl: app.repoUrl,
+          repoUrl: effectiveRepoUrl,
           targetDir: repoDir,
           branch: app.branch,
           depth: 1,
@@ -151,7 +172,7 @@ async function executeDeploy(
     } else {
       logs.push("[deploy] Cloning repository...");
       const cloneResult = await cloneRepo({
-        repoUrl: app.repoUrl,
+        repoUrl: effectiveRepoUrl,
         targetDir: repoDir,
         branch: app.branch,
         depth: 1,

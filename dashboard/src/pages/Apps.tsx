@@ -30,6 +30,22 @@ interface Deployment {
   createdAt: string;
 }
 
+interface GitHubRepo {
+  id: number;
+  name: string;
+  fullName: string;
+  private: boolean;
+  url: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  updatedAt: string;
+}
+
+interface GitHubStatus {
+  connected: boolean;
+  configured: boolean;
+}
+
 type View = "list" | "create" | "detail";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +66,115 @@ function timeAgo(iso: string): string {
   return `${days}d ago`;
 }
 
+// ─── Repo Picker ──────────────────────────────────────────────────────────────
+
+function RepoPicker({
+  onSelect,
+}: {
+  onSelect: (repo: GitHubRepo) => void;
+}) {
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchRepos() {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await api<{ repos: GitHubRepo[] }>("/github/repos");
+        setRepos(data.repos);
+      } catch (err) {
+        setError(
+          err instanceof ApiError ? err.message : "Failed to load repos"
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchRepos();
+  }, []);
+
+  const filtered = repos.filter(
+    (r) =>
+      r.fullName.toLowerCase().includes(search.toLowerCase()) ||
+      r.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  if (loading) {
+    return (
+      <div className="py-4 text-sm text-zinc-500">Loading repositories...</div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3">
+        <p className="text-sm text-red-400">{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search repositories..."
+        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+      />
+      <div className="max-h-64 overflow-y-auto space-y-1 rounded-lg border border-zinc-800 bg-zinc-950 p-1">
+        {filtered.length === 0 ? (
+          <p className="text-xs text-zinc-600 px-3 py-4 text-center">
+            No repositories found
+          </p>
+        ) : (
+          filtered.map((repo) => (
+            <button
+              key={repo.id}
+              type="button"
+              onClick={() => onSelect(repo)}
+              className="w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-zinc-800 transition-colors flex items-center justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-medium truncate">
+                    {repo.fullName}
+                  </span>
+                  {repo.private && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 shrink-0">
+                      Private
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-zinc-600">
+                  {repo.defaultBranch} &middot; updated{" "}
+                  {timeAgo(repo.updatedAt)}
+                </span>
+              </div>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-zinc-600 shrink-0"
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Create App Form ──────────────────────────────────────────────────────────
 
 function CreateAppForm({
@@ -64,6 +189,38 @@ function CreateAppForm({
   const [branch, setBranch] = useState("main");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // GitHub integration state
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
+  const [useManualUrl, setUseManualUrl] = useState(false);
+  const [selectedRepoName, setSelectedRepoName] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkGitHub() {
+      try {
+        const data = await api<GitHubStatus>("/github/status");
+        setGithubStatus(data);
+      } catch {
+        setGithubStatus(null);
+      }
+    }
+    checkGitHub();
+  }, []);
+
+  const handleRepoSelect = (repo: GitHubRepo) => {
+    setRepoUrl(repo.cloneUrl);
+    setBranch(repo.defaultBranch);
+    setSelectedRepoName(repo.fullName);
+  };
+
+  const handleConnectGitHub = async () => {
+    try {
+      const data = await api<{ url: string }>("/github/authorize");
+      window.location.href = data.url;
+    } catch {
+      // ignore
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,6 +238,9 @@ function CreateAppForm({
       setSaving(false);
     }
   };
+
+  const showRepoPicker =
+    githubStatus?.connected && !useManualUrl && !selectedRepoName;
 
   return (
     <div className="max-w-xl">
@@ -118,16 +278,110 @@ function CreateAppForm({
 
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-1.5">
-            Repository URL
+            Repository
           </label>
-          <input
-            type="url"
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            placeholder="https://github.com/user/repo.git"
-            required
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono-code"
-          />
+
+          {/* GitHub Connected: show repo picker */}
+          {showRepoPicker && (
+            <div className="space-y-2">
+              <RepoPicker onSelect={handleRepoSelect} />
+              <button
+                type="button"
+                onClick={() => setUseManualUrl(true)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Or enter URL manually
+              </button>
+            </div>
+          )}
+
+          {/* GitHub Connected + repo selected: show selected repo */}
+          {githubStatus?.connected && selectedRepoName && !useManualUrl && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-zinc-500 shrink-0"
+                >
+                  <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                </svg>
+                <span className="text-sm text-white font-mono-code flex-1 truncate">
+                  {selectedRepoName}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedRepoName(null);
+                    setRepoUrl("");
+                    setBranch("main");
+                  }}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
+                >
+                  Change
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* GitHub not connected: show connect button + manual fallback */}
+          {githubStatus && !githubStatus.connected && !useManualUrl && githubStatus.configured && (
+            <div className="space-y-3">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-center">
+                <p className="text-sm text-zinc-400 mb-3">
+                  Connect GitHub to pick from your repositories
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleConnectGitHub}
+                >
+                  Connect GitHub
+                </Button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUseManualUrl(true)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Or enter URL manually
+              </button>
+            </div>
+          )}
+
+          {/* Manual URL input (fallback, or when GitHub not configured) */}
+          {(useManualUrl || !githubStatus?.configured) && (
+            <div className="space-y-2">
+              <input
+                type="url"
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/user/repo.git"
+                required
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 font-mono-code"
+              />
+              {githubStatus?.connected && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseManualUrl(false);
+                    setSelectedRepoName(null);
+                    setRepoUrl("");
+                    setBranch("main");
+                  }}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Pick from GitHub instead
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div>
