@@ -409,12 +409,36 @@ function CreateAppForm({
 
 // ─── Env Var Editor ───────────────────────────────────────────────────────────
 
+function parseEnvText(text: string): { key: string; value: string }[] {
+  const results: { key: string; value: string }[] = [];
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.substring(0, eqIdx).trim();
+    let value = trimmed.substring(eqIdx + 1);
+    // Strip surrounding quotes
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (key) results.push({ key, value });
+  }
+  return results;
+}
+
 function EnvVarEditor({ appId }: { appId: string }) {
   const [vars, setVars] = useState<{ key: string; value: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [pasteMode, setPasteMode] = useState(false);
+  const [pasteText, setPasteText] = useState("");
 
   useEffect(() => {
     async function fetchEnv() {
@@ -454,6 +478,23 @@ function EnvVarEditor({ appId }: { appId: string }) {
     setVars(next);
   };
 
+  const handlePaste = () => {
+    const parsed = parseEnvText(pasteText);
+    if (parsed.length === 0) {
+      setError("No valid KEY=value pairs found");
+      return;
+    }
+    // Merge with existing: new keys override, existing keys without conflict stay
+    const existing = new Map(vars.filter((v) => v.key.trim()).map((v) => [v.key, v.value]));
+    for (const p of parsed) {
+      existing.set(p.key, p.value);
+    }
+    setVars([...existing.entries()].map(([key, value]) => ({ key, value })));
+    setPasteMode(false);
+    setPasteText("");
+    setError(null);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -490,10 +531,35 @@ function EnvVarEditor({ appId }: { appId: string }) {
         <h4 className="text-sm font-medium text-zinc-300">
           Environment Variables
         </h4>
-        <Button variant="ghost" size="sm" onClick={addRow}>
-          + Add Variable
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setPasteMode(!pasteMode)}
+          >
+            {pasteMode ? "Cancel" : "Paste .env"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={addRow}>
+            + Add Variable
+          </Button>
+        </div>
       </div>
+
+      {pasteMode && (
+        <div className="space-y-2">
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            placeholder={`Paste your .env contents here:\n\nDATABASE_URL=postgres://...\nAPI_KEY=sk-...\nNODE_ENV=production`}
+            rows={8}
+            className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono-code resize-y"
+            autoFocus
+          />
+          <Button variant="primary" size="sm" onClick={handlePaste}>
+            Parse & Import
+          </Button>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
