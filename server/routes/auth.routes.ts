@@ -42,7 +42,7 @@ authRoutes.post("/setup", async (c) => {
 
   setCookie(c, "panelkit_session", result.token, {
     httpOnly: true,
-    secure: true,
+    secure: false,
     sameSite: "Lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7, // 7 days
@@ -69,7 +69,7 @@ authRoutes.post("/login", async (c) => {
 
   setCookie(c, "panelkit_session", result.token, {
     httpOnly: true,
-    secure: true,
+    secure: false,
     sameSite: "Lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,

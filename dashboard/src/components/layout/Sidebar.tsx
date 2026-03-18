@@ -235,16 +235,12 @@ export function Sidebar({ currentPath, onNavigate }: Props) {
                     ${collapsed ? "justify-center px-2 py-2" : "px-2.5 py-[7px]"}
                     ${
                       isActive
-                        ? "bg-zinc-800/80 text-white"
+                        ? "bg-white/5 text-white"
                         : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
                     }
                   `}
                   title={collapsed ? item.label : undefined}
                 >
-                  {/* Active indicator bar */}
-                  {isActive && (
-                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-4 bg-blue-500 rounded-r-full" />
-                  )}
                   <span className={`shrink-0 ${isActive ? "text-blue-400" : "text-zinc-500 group-hover:text-zinc-400"}`}>
                     {item.icon}
                   </span>
