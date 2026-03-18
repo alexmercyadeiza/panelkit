@@ -56,9 +56,9 @@ log_section() {
   echo "--- $1"
 }
 
-# ─── Step 1/7: Required packages ────────────────────────────────────────────
+# ─── Step 1/8: Required packages ────────────────────────────────────────────
 
-log_section "Step 1/7: Installing required packages"
+log_section "Step 1/8: Installing required packages"
 
 install_packages() {
   case "$OS_TYPE" in
@@ -98,9 +98,9 @@ else
   log "Done."
 fi
 
-# ─── Step 2/7: Install Bun ──────────────────────────────────────────────────
+# ─── Step 2/8: Install Bun ──────────────────────────────────────────────────
 
-log_section "Step 2/7: Checking Bun runtime"
+log_section "Step 2/8: Checking Bun runtime"
 
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:/usr/local/bin:$PATH"
@@ -117,34 +117,35 @@ else
   log "Bun already installed: $(bun --version)"
 fi
 
-# ─── Step 3/7: Install PM2 ───────────────────────────────────────────────────
+# ─── Step 3/8: Install Node.js + npm ─────────────────────────────────────────
 
-log_section "Step 3/7: Checking PM2"
+log_section "Step 3/8: Checking Node.js"
+
+if ! command -v node >/dev/null 2>&1; then
+  log "Installing Node.js (LTS)..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y -qq nodejs >/dev/null 2>&1
+  log "Node.js installed: $(node --version), npm: $(npm --version)"
+else
+  log "Node.js already installed: $(node --version), npm: $(npm --version)"
+fi
+
+# ─── Step 4/8: Install PM2 ───────────────────────────────────────────────────
+
+log_section "Step 4/8: Checking PM2"
 
 if ! command -v pm2 >/dev/null 2>&1; then
   log "Installing PM2..."
-  if command -v npm >/dev/null 2>&1; then
-    npm install -g pm2 >/dev/null 2>&1
-  elif command -v bun >/dev/null 2>&1; then
-    bun install -g pm2 >/dev/null 2>&1
-  else
-    log "WARNING: Neither npm nor bun available to install PM2"
-  fi
-
-  if command -v pm2 >/dev/null 2>&1; then
-    log "PM2 installed: $(pm2 --version)"
-    # Set up PM2 startup script for auto-restart on boot
-    pm2 startup >/dev/null 2>&1 || true
-  else
-    log "WARNING: PM2 installation failed. Install manually: npm install -g pm2"
-  fi
+  npm install -g pm2 >/dev/null 2>&1
+  pm2 startup >/dev/null 2>&1 || true
+  log "PM2 installed: $(pm2 --version)"
 else
   log "PM2 already installed: $(pm2 --version)"
 fi
 
-# ─── Step 4/7: Install Caddy ────────────────────────────────────────────────
+# ─── Step 5/8: Install Caddy ────────────────────────────────────────────────
 
-log_section "Step 4/7: Checking Caddy"
+log_section "Step 5/8: Checking Caddy"
 
 if ! command -v caddy >/dev/null 2>&1; then
   log "Installing Caddy..."
@@ -182,9 +183,9 @@ else
   log "Caddy already installed: $(caddy version)"
 fi
 
-# ─── Step 5/7: Create data directories + .env ───────────────────────────────
+# ─── Step 6/8: Create data directories + .env ───────────────────────────────
 
-log_section "Step 5/7: Setting up data directories"
+log_section "Step 6/8: Setting up data directories"
 
 mkdir -p "$PANELKIT_DIR"/{data,apps,storage,backups,logs}
 log "Created $PANELKIT_DIR"
@@ -210,9 +211,9 @@ else
   log "Environment file already exists — skipping."
 fi
 
-# ─── Step 6/7: Download & install PanelKit ───────────────────────────────────
+# ─── Step 7/8: Download & install PanelKit ───────────────────────────────────
 
-log_section "Step 6/7: Installing PanelKit"
+log_section "Step 7/8: Installing PanelKit"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -258,9 +259,9 @@ fi
 
 log "Done."
 
-# ─── Step 7/7: Create systemd service & start ────────────────────────────────
+# ─── Step 8/8: Create systemd service & start ────────────────────────────────
 
-log_section "Step 7/7: Starting PanelKit"
+log_section "Step 8/8: Starting PanelKit"
 
 cat > /etc/systemd/system/panelkit.service << EOF
 [Unit]
