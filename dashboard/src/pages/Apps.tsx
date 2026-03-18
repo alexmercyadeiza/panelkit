@@ -670,20 +670,44 @@ function AppDetailView({
   const handleDeploy = async () => {
     setDeploying(true);
     setActionError(null);
-    setDeployLog(null);
+    setDeployLog("Starting deploy...\n");
     try {
       await api(`/apps/${app.id}/deploy`, { method: "POST" });
-      await refreshApp();
-      await fetchDeployments();
+
+      // Poll for deploy progress every 2 seconds
+      const poll = setInterval(async () => {
+        try {
+          const data = await api<{ deployments: Deployment[] }>(
+            `/apps/${app.id}/deployments?limit=1`
+          );
+          const latest = data.deployments[0];
+          if (latest?.buildLog) {
+            setDeployLog(latest.buildLog);
+          }
+          // Stop polling when deploy finishes
+          if (
+            latest &&
+            ["running", "failed", "rolled_back"].includes(latest.status)
+          ) {
+            clearInterval(poll);
+            setDeploying(false);
+            await refreshApp();
+            await fetchDeployments();
+          }
+        } catch {
+          // keep polling
+        }
+      }, 2000);
+
+      // Safety timeout: stop polling after 5 minutes
+      setTimeout(() => {
+        clearInterval(poll);
+        setDeploying(false);
+      }, 300000);
     } catch (err) {
-      if (err instanceof ApiError && err.data) {
-        const d = err.data as { buildLog?: string };
-        if (d.buildLog) setDeployLog(d.buildLog);
-      }
       setActionError(
         err instanceof ApiError ? err.message : "Deployment failed"
       );
-    } finally {
       setDeploying(false);
     }
   };

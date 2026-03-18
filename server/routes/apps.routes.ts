@@ -207,26 +207,24 @@ appsRoutes.post("/:id/deploy", async (c) => {
     return c.json({ error: "App not found" }, 404);
   }
 
-  const result = await queueDeploy(id, db);
+  // Fire and forget — don't await the deploy, return immediately
+  queueDeploy(id, db).catch((err) => {
+    console.error(`[deploy] Deploy failed for ${app.name}:`, err);
+  });
 
-  if (!result.success) {
-    return c.json(
-      {
-        error: "Deployment failed",
-        deploymentId: result.deploymentId,
-        details: result.error,
-        buildLog: result.buildLog,
-      },
-      500
-    );
-  }
+  // Return the latest pending deployment ID
+  const latestDeploy = await db
+    .select()
+    .from(deployments)
+    .where(eq(deployments.appId, id))
+    .orderBy(desc(deployments.createdAt))
+    .limit(1);
 
   return c.json({
     success: true,
-    deploymentId: result.deploymentId,
-    containerId: result.containerId,
-    port: result.port,
-  });
+    deploymentId: latestDeploy[0]?.id || null,
+    message: "Deploy started",
+  }, 202);
 });
 
 // ─── POST /api/apps/:id/rollback — Rollback to previous deployment ─────────

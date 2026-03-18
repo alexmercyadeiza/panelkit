@@ -80,6 +80,14 @@ async function executeDeploy(
   const now = new Date().toISOString();
   const logs: string[] = [];
 
+  // Flush logs to DB so the dashboard can poll them in real-time
+  async function flushLog() {
+    await db
+      .update(deployments)
+      .set({ buildLog: logs.join("\n") })
+      .where(eq(deployments.id, deploymentId));
+  }
+
   // Create deployment record
   await db.insert(deployments).values({
     id: deploymentId,
@@ -185,6 +193,7 @@ async function executeDeploy(
       }
       logs.push("[deploy] Clone completed");
     }
+    await flushLog();
 
     // 3. Get commit info
     const commitHash = await getHeadCommit(repoDir);
@@ -245,6 +254,7 @@ async function executeDeploy(
 
       logs.push("[deploy] Dependencies installed");
     }
+    await flushLog();
 
     // 5b. Build step
     if (buildCommand) {
@@ -262,6 +272,7 @@ async function executeDeploy(
 
       logs.push("[deploy] Build completed");
     }
+    await flushLog();
 
     await db
       .update(deployments)
@@ -322,9 +333,11 @@ async function executeDeploy(
     }
 
     logs.push("[deploy] PM2 process started");
+    await flushLog();
 
     // 11. Health check
     logs.push("[deploy] Running health check...");
+    await flushLog();
     const healthy = await waitForHealthy(port, 30000);
 
     if (!healthy) {
