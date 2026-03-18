@@ -64,16 +64,16 @@ install_packages() {
   case "$OS_TYPE" in
     ubuntu|debian|raspbian|pop|linuxmint)
       apt-get update -qq
-      apt-get install -y -qq curl wget git openssl >/dev/null 2>&1
+      apt-get install -y -qq curl wget git openssl unzip rsync >/dev/null 2>&1
       ;;
     fedora|centos|rhel|almalinux|rocky)
-      dnf install -y curl wget git openssl >/dev/null 2>&1
+      dnf install -y curl wget git openssl unzip rsync >/dev/null 2>&1
       ;;
     arch|manjaro|endeavouros)
-      pacman -Sy --noconfirm curl wget git openssl >/dev/null 2>&1
+      pacman -Sy --noconfirm curl wget git openssl unzip rsync >/dev/null 2>&1
       ;;
     alpine)
-      apk add curl wget git openssl bash >/dev/null 2>&1
+      apk add curl wget git openssl unzip rsync bash >/dev/null 2>&1
       ;;
     *)
       log "Unknown OS: $OS_TYPE — assuming packages are installed"
@@ -82,7 +82,7 @@ install_packages() {
 }
 
 all_packages_installed() {
-  for pkg in curl wget git openssl; do
+  for pkg in curl wget git openssl unzip rsync; do
     if ! command -v "$pkg" >/dev/null 2>&1; then
       return 1
     fi
@@ -102,11 +102,12 @@ fi
 
 log_section "Step 2/7: Checking Bun runtime"
 
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:/usr/local/bin:$PATH"
+
 if ! command -v bun >/dev/null 2>&1; then
   log "Installing Bun..."
-  curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
-  export BUN_INSTALL="$HOME/.bun"
-  export PATH="$BUN_INSTALL/bin:$PATH"
+  curl -fsSL https://bun.sh/install | bash
 
   # System-wide symlink
   ln -sf "$BUN_INSTALL/bin/bun" /usr/local/bin/bun 2>/dev/null || true
