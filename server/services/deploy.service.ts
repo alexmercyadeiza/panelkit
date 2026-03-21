@@ -179,11 +179,7 @@ async function executeDeploy(
 
     const repoExists = await dirExists(join(repoDir, ".git"));
 
-    // Clean up leftover directory from a failed clone (exists but no .git)
-    if (!repoExists && await dirExists(repoDir)) {
-      logs.push("[deploy] Cleaning up leftover directory from previous failed deploy...");
-      await cleanupDir(repoDir);
-    }
+    let cloneNeeded = !repoExists;
 
     if (repoExists) {
       // Persist authenticated remote URL so future pulls work
@@ -213,26 +209,21 @@ async function executeDeploy(
       logs.push("[deploy] Pulling latest changes...");
       const pullResult = await pullRepo(repoDir);
       if (!pullResult.success) {
-        logs.push(`[deploy] Pull failed: ${pullResult.stderr}`);
-        // Try fresh clone
-        await cleanupDir(repoDir);
-        const cloneResult = await cloneRepo({
-          repoUrl: effectiveRepoUrl,
-          targetDir: repoDir,
-          branch: app.branch,
-          depth: 1,
-        });
-        if (!cloneResult.success) {
-          throw new DeployError(
-            `Clone failed: ${cloneResult.stderr}`,
-            500
-          );
-        }
-        logs.push("[deploy] Fresh clone completed");
+        logs.push(`[deploy] Pull failed: ${pullResult.stderr}, will re-clone`);
+        cloneNeeded = true;
       } else {
         logs.push("[deploy] Pull completed");
       }
-    } else {
+    }
+
+    if (cloneNeeded) {
+      // Always clean up existing dir before cloning (handles partial clones,
+      // broken .git dirs, leftover dirs from previous failed deploys)
+      if (await dirExists(repoDir)) {
+        logs.push("[deploy] Cleaning up existing repo directory...");
+        await cleanupDir(repoDir);
+      }
+
       logs.push("[deploy] Cloning repository...");
       const cloneResult = await cloneRepo({
         repoUrl: effectiveRepoUrl,
