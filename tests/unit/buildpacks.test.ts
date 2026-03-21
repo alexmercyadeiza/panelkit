@@ -212,7 +212,7 @@ describe("Lockfile Detection", () => {
     });
     writeFile("bun.lockb", "");
     const r = await detectRuntime(tempDir);
-    expect(r.installCommand).toBe("npm install");
+    expect(r.installCommand).toBe("npm install --include=dev");
     expect(r.buildCommand).toBe("npm run build");
   });
 
@@ -223,7 +223,7 @@ describe("Lockfile Detection", () => {
     });
     writeFile("package-lock.json", "{}");
     const r = await detectRuntime(tempDir);
-    expect(r.installCommand).toBe("npm ci");
+    expect(r.installCommand).toBe("npm ci --include=dev");
     expect(r.buildCommand).toBe("npm run build");
   });
 
@@ -234,7 +234,7 @@ describe("Lockfile Detection", () => {
     });
     writeFile("bun.lockb", "");
     const r = await detectRuntime(tempDir);
-    expect(r.installCommand).toBe("npm install");
+    expect(r.installCommand).toBe("npm install --include=dev");
     expect(r.buildCommand).toBe("npm run build");
   });
 

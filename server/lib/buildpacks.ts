@@ -159,10 +159,14 @@ async function detectNodeFramework(dir: string): Promise<DetectionResult> {
   };
 
   // Determine install command for SSR frameworks:
+  // Must include devDependencies (tailwindcss, postcss plugins, etc. are needed
+  // at build time). Use --production=false to override NODE_ENV=production.
   // If package-lock.json exists → npm ci (fast, deterministic)
   // Otherwise → npm install (generates node_modules from package.json)
   const hasNpmLock = await fileExists(join(dir, "package-lock.json"));
-  const ssrInstallCmd = hasNpmLock ? "npm ci" : "npm install";
+  const ssrInstallCmd = hasNpmLock
+    ? "npm ci --include=dev"
+    : "npm install --include=dev";
 
   // ── SSR / build-step frameworks (must use npm for Node compatibility) ──
 
