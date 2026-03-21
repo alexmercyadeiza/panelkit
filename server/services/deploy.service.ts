@@ -7,6 +7,8 @@ import { generateId, decrypt, generateWebhookSecret } from "./crypto.service";
 import {
   cloneRepo,
   pullRepo,
+  fetchRepo,
+  checkoutBranch,
   getHeadCommit,
   getCommitMessage,
   getAppRepoDir,
@@ -21,9 +23,9 @@ import {
   getAuthenticatedCloneUrl,
 } from "./github.service";
 
-// ─── Deploy Queue ───────────────────────────────────────────────────────────
+// ─── Deploy Queue (per-app mutex) ───────────────────────────────────────────
 
-const deployQueues = new Map<string, Promise<DeployResult>>();
+const deployLocks = new Map<string, Promise<DeployResult>>();
 
 export interface DeployResult {
   success: boolean;
@@ -35,38 +37,63 @@ export interface DeployResult {
 }
 
 /**
- * Queue a deploy for an app. If a deploy is already in progress for
- * the same app, the new one waits for it to finish first.
+ * Queue a deploy for an app. Uses a per-app mutex so only one deploy
+ * runs at a time per app. Concurrent requests wait for the lock.
  */
 export async function queueDeploy(
   appId: string,
   db?: AppDatabase
 ): Promise<DeployResult> {
   const database = db || getDb();
-  const existing = deployQueues.get(appId);
 
-  const deployPromise = (async () => {
-    // Wait for any in-progress deploy to finish
-    if (existing) {
-      try {
-        await existing;
-      } catch {
-        // Previous deploy failed, proceed with ours
-      }
+  // Wait for any in-progress deploy to finish, then start ours
+  while (deployLocks.has(appId)) {
+    try {
+      await deployLocks.get(appId);
+    } catch {
+      // Previous deploy failed, proceed
     }
+  }
 
-    return executeDeploy(appId, database);
-  })();
-
-  deployQueues.set(appId, deployPromise);
+  const deployPromise = executeDeploy(appId, database);
+  deployLocks.set(appId, deployPromise);
 
   try {
     return await deployPromise;
   } finally {
-    // Clean up queue entry only if this is still the latest
-    if (deployQueues.get(appId) === deployPromise) {
-      deployQueues.delete(appId);
+    deployLocks.delete(appId);
+  }
+}
+
+// ─── Pre-deploy Checks ─────────────────────────────────────────────────────
+
+async function preDeployChecks(logs: string[]): Promise<void> {
+  // Check node/npm/pm2 are available
+  for (const bin of ["node", "npm", "pm2"]) {
+    const result = await runShellCommand(`command -v ${bin}`, "/tmp");
+    if (!result.success) {
+      throw new DeployError(
+        `Required binary '${bin}' not found. Run install.sh first.`,
+        500
+      );
     }
+  }
+  logs.push("[deploy] Pre-checks: node, npm, pm2 available");
+
+  // Check disk space (need at least 500MB free)
+  const dfResult = await runShellCommand(
+    "df -BM / | awk 'NR==2 {print $4}' | sed 's/M//'",
+    "/tmp"
+  );
+  if (dfResult.success) {
+    const freeMB = parseInt(dfResult.stdout.trim(), 10);
+    if (!isNaN(freeMB) && freeMB < 500) {
+      throw new DeployError(
+        `Insufficient disk space: ${freeMB}MB free, need at least 500MB`,
+        500
+      );
+    }
+    logs.push(`[deploy] Pre-checks: ${freeMB}MB disk space available`);
   }
 }
 
@@ -108,6 +135,10 @@ async function executeDeploy(
     }
 
     logs.push(`[deploy] Starting deployment for ${app.name}`);
+
+    // Pre-deploy checks: verify node/npm/pm2 + disk space
+    await preDeployChecks(logs);
+    await flushLog();
 
     // Update app status
     await db
@@ -155,6 +186,30 @@ async function executeDeploy(
     }
 
     if (repoExists) {
+      // Persist authenticated remote URL so future pulls work
+      if (effectiveRepoUrl !== app.repoUrl) {
+        await runShellCommand(
+          `git remote set-url origin '${effectiveRepoUrl}'`,
+          repoDir
+        );
+        logs.push("[deploy] Updated remote URL with auth token");
+      }
+
+      // Fetch + checkout branch before pulling
+      logs.push(`[deploy] Fetching latest refs...`);
+      const fetchResult = await fetchRepo(repoDir);
+      if (!fetchResult.success) {
+        logs.push(`[deploy] Fetch failed: ${fetchResult.stderr}`);
+      }
+
+      if (app.branch) {
+        logs.push(`[deploy] Checking out branch: ${app.branch}`);
+        const checkoutResult = await checkoutBranch(repoDir, app.branch);
+        if (!checkoutResult.success) {
+          logs.push(`[deploy] Checkout failed: ${checkoutResult.stderr}`);
+        }
+      }
+
       logs.push("[deploy] Pulling latest changes...");
       const pullResult = await pullRepo(repoDir);
       if (!pullResult.success) {
@@ -212,11 +267,13 @@ async function executeDeploy(
 
     // 4. Detect runtime
     const detection = await detectRuntime(repoDir);
-    logs.push(`[deploy] Runtime detected: ${detection.runtime} (via ${detection.detectedBy})`);
+    logs.push(
+      `[deploy] Detected: ${detection.framework} (runtime: ${detection.runtime}, via ${detection.detectedBy})`
+    );
 
     if (detection.runtime === "unknown") {
       throw new DeployError(
-        "Could not detect runtime. Add a supported project file (package.json, requirements.txt, go.mod, etc.).",
+        "Could not detect runtime. Add a package.json or index.html.",
         400
       );
     }
@@ -233,7 +290,17 @@ async function executeDeploy(
       );
     }
 
-    // 5. Install dependencies
+    // 5. Clean deploy — remove node_modules + build output dirs before install
+    const dirsToClean = ["node_modules", ...detection.buildOutputDirs];
+    for (const d of dirsToClean) {
+      const dirPath = join(repoDir, d);
+      if (await dirExists(dirPath)) {
+        logs.push(`[deploy] Cleaning ${d}...`);
+        await cleanupDir(dirPath);
+      }
+    }
+
+    // 6. Install dependencies
     if (installCommand) {
       logs.push(`[deploy] Installing dependencies: ${installCommand}`);
 
@@ -256,7 +323,7 @@ async function executeDeploy(
     }
     await flushLog();
 
-    // 5b. Build step
+    // 7. Build step
     if (buildCommand) {
       logs.push(`[deploy] Building: ${buildCommand}`);
 
@@ -271,6 +338,13 @@ async function executeDeploy(
       }
 
       logs.push("[deploy] Build completed");
+
+      // Validate build output dirs exist after build
+      for (const d of detection.buildOutputDirs) {
+        if (!(await dirExists(join(repoDir, d)))) {
+          logs.push(`[deploy] WARNING: Expected build output dir '${d}' not found after build`);
+        }
+      }
     }
     await flushLog();
 
@@ -279,7 +353,7 @@ async function executeDeploy(
       .set({ status: "deploying" })
       .where(eq(deployments.id, deploymentId));
 
-    // 6. Get env vars
+    // 8. Get env vars — fail if any can't be decrypted
     const envRows = await db.query.appEnvVars.findMany({
       where: eq(appEnvVars.appId, appId),
     });
@@ -288,12 +362,16 @@ async function executeDeploy(
     for (const row of envRows) {
       try {
         envVars[row.key] = await decrypt(row.encryptedValue);
-      } catch {
-        logs.push(`[deploy] Warning: Could not decrypt env var ${row.key}`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new DeployError(
+          `Failed to decrypt env var '${row.key}': ${msg}`,
+          500
+        );
       }
     }
 
-    // 7. Allocate port
+    // 9. Allocate port
     let port = app.port;
     if (!port) {
       port = await allocatePort(appId, db);
@@ -303,23 +381,29 @@ async function executeDeploy(
     // Add PORT env var so the app knows which port to listen on
     envVars.PORT = String(port);
 
-    // 8. PM2 process name
+    // Resolve $PORT in start command
+    const resolvedStartCommand = startCommand.replace(/\$PORT/g, String(port));
+
+    // 10. Validate start command — if it references `node X`, check file exists
+    await validateStartCommand(resolvedStartCommand, repoDir, logs);
+
+    // 11. PM2 process name
     const processName = `panelkit-${app.name}`;
     const oldProcessName = app.containerId; // repurposed from containerId
 
-    // 9. Stop old PM2 process if exists
+    // 12. Stop old PM2 process if exists
     if (oldProcessName) {
       logs.push(`[deploy] Stopping old process ${oldProcessName}...`);
       await pm2Delete(oldProcessName);
       logs.push("[deploy] Old process stopped");
     }
 
-    // 10. Start new PM2 process
+    // 13. Start new PM2 process
     logs.push(`[deploy] Starting PM2 process ${processName}...`);
 
     const pm2Result = await pm2Start({
       name: processName,
-      script: startCommand,
+      script: resolvedStartCommand,
       cwd: repoDir,
       env: envVars,
     });
@@ -335,20 +419,20 @@ async function executeDeploy(
     logs.push("[deploy] PM2 process started");
     await flushLog();
 
-    // 11. Health check
+    // 14. Health check — 60s timeout, 2s interval, 200-399 = healthy
     logs.push("[deploy] Running health check...");
     await flushLog();
-    const healthy = await waitForHealthy(port, 30000);
+    const healthy = await waitForHealthy(port, 60000);
 
     if (!healthy) {
       logs.push("[deploy] Health check failed, rolling back...");
       await pm2Delete(processName);
-      throw new DeployError("Health check failed after 30s", 500);
+      throw new DeployError("Health check failed after 60s", 500);
     }
 
     logs.push("[deploy] Health check passed");
 
-    // 12. Update app and deployment records
+    // 15. Update app and deployment records
     const finishedAt = new Date().toISOString();
 
     await db
@@ -412,6 +496,27 @@ async function executeDeploy(
   }
 }
 
+// ─── Start Command Validation ───────────────────────────────────────────────
+
+async function validateStartCommand(
+  startCommand: string,
+  repoDir: string,
+  logs: string[]
+): Promise<void> {
+  // Check if command is `node <file>` and verify the file exists
+  const nodeFileMatch = startCommand.match(/^node\s+([^\s]+)/);
+  if (nodeFileMatch) {
+    const filePath = join(repoDir, nodeFileMatch[1]);
+    if (!(await fileExists(filePath))) {
+      throw new DeployError(
+        `Start command references '${nodeFileMatch[1]}' but it does not exist after build`,
+        500
+      );
+    }
+    logs.push(`[deploy] Validated start file: ${nodeFileMatch[1]}`);
+  }
+}
+
 // ─── Rollback ───────────────────────────────────────────────────────────────
 
 /**
@@ -426,6 +531,7 @@ export async function rollback(
   const database = db || getDb();
   const deploymentId = generateId();
   const now = new Date().toISOString();
+  const logs: string[] = [];
 
   const app = await database.query.apps.findFirst({
     where: eq(apps.id, appId),
@@ -486,21 +592,68 @@ export async function rollback(
 
     // Checkout the target commit in the repo
     const repoDir = getAppRepoDir(appId);
+    logs.push(`[rollback] Checking out commit ${targetDeploy.commitHash?.substring(0, 8)}`);
 
     if (targetDeploy.commitHash) {
       await runShellCommand(`git checkout ${targetDeploy.commitHash}`, repoDir);
     }
 
-    // Detect runtime and install deps
+    // Detect runtime and get proper commands
     const detection = await detectRuntime(repoDir);
-    const installCommand = app.buildCommand || detection.installCommand;
+    logs.push(
+      `[rollback] Detected: ${detection.framework} (runtime: ${detection.runtime})`
+    );
+
+    // FIX: use detection.installCommand, not app.buildCommand
+    const installCommand = detection.installCommand;
+    const buildCommand = app.buildCommand || detection.buildCommand;
     const startCommand = app.startCommand || detection.startCommand;
 
-    if (installCommand) {
-      await runShellCommand(installCommand, repoDir);
+    // Clean node_modules + build output dirs for clean rollback
+    const dirsToClean = ["node_modules", ...detection.buildOutputDirs];
+    for (const d of dirsToClean) {
+      const dirPath = join(repoDir, d);
+      if (await dirExists(dirPath)) {
+        logs.push(`[rollback] Cleaning ${d}...`);
+        await cleanupDir(dirPath);
+      }
     }
 
-    // Get env vars
+    // Install dependencies
+    if (installCommand) {
+      logs.push(`[rollback] Installing: ${installCommand}`);
+      const installResult = await runShellCommand(installCommand, repoDir);
+      if (!installResult.success) {
+        throw new DeployError(
+          `Rollback install failed: ${installResult.stderr}`,
+          500
+        );
+      }
+    }
+
+    // Build step (was missing in old rollback)
+    if (buildCommand) {
+      logs.push(`[rollback] Building: ${buildCommand}`);
+      const buildResult = await runShellCommand(buildCommand, repoDir);
+      if (!buildResult.success) {
+        throw new DeployError(
+          `Rollback build failed: ${buildResult.stderr}`,
+          500
+        );
+      }
+
+      // Validate build output dirs exist after build
+      for (const d of detection.buildOutputDirs) {
+        if (!(await dirExists(join(repoDir, d)))) {
+          throw new DeployError(
+            `Rollback build output dir '${d}' not found after build`,
+            500
+          );
+        }
+      }
+    }
+
+    // Get env vars — fail if any can't be decrypted
     const envRows = await database.query.appEnvVars.findMany({
       where: eq(appEnvVars.appId, appId),
     });
@@ -509,8 +662,12 @@ export async function rollback(
     for (const row of envRows) {
       try {
         envVars[row.key] = await decrypt(row.encryptedValue);
-      } catch {
-        // Skip vars that can't be decrypted
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new DeployError(
+          `Failed to decrypt env var '${row.key}': ${msg}`,
+          500
+        );
       }
     }
 
@@ -521,6 +678,12 @@ export async function rollback(
 
     envVars.PORT = String(port);
 
+    // Resolve $PORT in start command
+    const resolvedStartCommand = (startCommand || "npm start").replace(
+      /\$PORT/g,
+      String(port)
+    );
+
     const processName = `panelkit-${app.name}`;
 
     // Stop current PM2 process
@@ -529,9 +692,10 @@ export async function rollback(
     }
 
     // Start new PM2 process
+    logs.push(`[rollback] Starting PM2 process ${processName}...`);
     const pm2Result = await pm2Start({
       name: processName,
-      script: startCommand || "npm start",
+      script: resolvedStartCommand,
       cwd: repoDir,
       env: envVars,
     });
@@ -543,12 +707,13 @@ export async function rollback(
       );
     }
 
-    // Health check
-    const healthy = await waitForHealthy(port, 30000);
+    // Health check — 60s timeout, 2s interval, 200-399 healthy
+    logs.push("[rollback] Running health check...");
+    const healthy = await waitForHealthy(port, 60000);
 
     if (!healthy) {
       await pm2Delete(processName);
-      throw new DeployError("Rollback health check failed", 500);
+      throw new DeployError("Rollback health check failed after 60s", 500);
     }
 
     const finishedAt = new Date().toISOString();
@@ -570,6 +735,7 @@ export async function rollback(
         status: "running",
         containerId: processName,
         finishedAt,
+        buildLog: logs.join("\n"),
       })
       .where(eq(deployments.id, deploymentId));
 
@@ -578,17 +744,19 @@ export async function rollback(
       deploymentId,
       processName,
       port,
+      buildLog: logs.join("\n"),
     };
   } catch (error) {
     const errorMsg =
       error instanceof Error ? error.message : String(error);
+    logs.push(`[rollback] ERROR: ${errorMsg}`);
 
     await database
       .update(deployments)
       .set({
         status: "failed",
         finishedAt: new Date().toISOString(),
-        buildLog: `Rollback failed: ${errorMsg}`,
+        buildLog: logs.join("\n"),
       })
       .where(eq(deployments.id, deploymentId));
 
@@ -596,6 +764,7 @@ export async function rollback(
       success: false,
       deploymentId,
       error: errorMsg,
+      buildLog: logs.join("\n"),
     };
   }
 }
@@ -660,20 +829,26 @@ interface ShellResult {
 
 /**
  * Start a PM2 process using an ecosystem file for env var support.
+ * Uses `interpreter: 'bun'` for .ts scripts.
  */
 async function pm2Start(config: PM2StartConfig): Promise<ShellResult> {
-  const ecosystem = {
-    apps: [
-      {
-        name: config.name,
-        script: config.script,
-        cwd: config.cwd,
-        env: config.env,
-        autorestart: true,
-        max_restarts: 10,
-      },
-    ],
+  // Determine if we need bun as interpreter for TypeScript
+  const needsBunInterpreter = config.script.endsWith(".ts");
+
+  const appConfig: Record<string, any> = {
+    name: config.name,
+    script: config.script,
+    cwd: config.cwd,
+    env: config.env,
+    autorestart: true,
+    max_restarts: 10,
   };
+
+  if (needsBunInterpreter) {
+    appConfig.interpreter = "bun";
+  }
+
+  const ecosystem = { apps: [appConfig] };
 
   const ecosystemPath = join(
     config.cwd,
@@ -767,15 +942,15 @@ async function waitForHealthy(
   timeoutMs: number
 ): Promise<boolean> {
   const start = Date.now();
-  const interval = 1000;
+  const interval = 2000; // 2s interval (was 1s)
 
   while (Date.now() - start < timeoutMs) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/`, {
         signal: AbortSignal.timeout(2000),
       });
-      // Any response (even 404) means the server is up
-      if (response.status < 500) {
+      // Only 200-399 is healthy (was <500)
+      if (response.status >= 200 && response.status < 400) {
         return true;
       }
     } catch {
@@ -803,6 +978,15 @@ async function ensureDir(dir: string): Promise<void> {
 async function dirExists(dir: string): Promise<boolean> {
   try {
     const file = Bun.file(dir);
+    return await file.exists();
+  } catch {
+    return false;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    const file = Bun.file(path);
     return await file.exists();
   } catch {
     return false;

@@ -639,6 +639,19 @@ function AppDetailView({
   const [expandedDeployId, setExpandedDeployId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [currentApp, setCurrentApp] = useState<App>(app);
+  const [serverIp, setServerIp] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchServerIp() {
+      try {
+        const data = await api<{ serverIp: string | null }>("/health");
+        setServerIp(data.serverIp || null);
+      } catch {
+        // ignore
+      }
+    }
+    fetchServerIp();
+  }, []);
 
   const refreshApp = useCallback(async () => {
     try {
@@ -773,6 +786,32 @@ function AppDetailView({
           <p className="text-sm text-zinc-500 font-mono-code mt-0.5 truncate">
             {currentApp.repoUrl}
           </p>
+          {currentApp.port && serverIp && currentApp.status === "running" && (
+            <a
+              href={`http://${serverIp}:${currentApp.port}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm text-blue-400 hover:text-blue-300 transition-colors mt-1"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+              <span className="font-mono-code">
+                http://{serverIp}:{currentApp.port}
+              </span>
+            </a>
+          )}
         </div>
       </div>
 

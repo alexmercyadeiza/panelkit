@@ -72,12 +72,13 @@ app.route("/api/backups", backupsRoutes);
 app.route("/api/notifications", notificationsRoutes);
 app.route("/api/github", githubRoutes);
 
-// Health check
+// Health check + server info
 app.get("/api/health", (c) =>
   c.json({
     status: "ok",
     version: "0.1.0",
     uptime: process.uptime(),
+    serverIp: config.SERVER_IP || null,
   })
 );
 

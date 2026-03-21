@@ -64,16 +64,16 @@ install_packages() {
   case "$OS_TYPE" in
     ubuntu|debian|raspbian|pop|linuxmint)
       apt-get update -qq
-      apt-get install -y -qq curl wget git openssl unzip rsync >/dev/null 2>&1
+      apt-get install -y -qq curl wget git openssl unzip rsync build-essential >/dev/null 2>&1
       ;;
     fedora|centos|rhel|almalinux|rocky)
-      dnf install -y curl wget git openssl unzip rsync >/dev/null 2>&1
+      dnf install -y curl wget git openssl unzip rsync gcc gcc-c++ make >/dev/null 2>&1
       ;;
     arch|manjaro|endeavouros)
-      pacman -Sy --noconfirm curl wget git openssl unzip rsync >/dev/null 2>&1
+      pacman -Sy --noconfirm curl wget git openssl unzip rsync base-devel >/dev/null 2>&1
       ;;
     alpine)
-      apk add curl wget git openssl unzip rsync bash >/dev/null 2>&1
+      apk add curl wget git openssl unzip rsync bash build-base >/dev/null 2>&1
       ;;
     *)
       log "Unknown OS: $OS_TYPE — assuming packages are installed"
@@ -82,7 +82,7 @@ install_packages() {
 }
 
 all_packages_installed() {
-  for pkg in curl wget git openssl unzip rsync; do
+  for pkg in curl wget git openssl unzip rsync gcc; do
     if ! command -v "$pkg" >/dev/null 2>&1; then
       return 1
     fi
@@ -143,6 +143,15 @@ else
   log "PM2 already installed: $(pm2 --version)"
 fi
 
+# Install serve globally for static site and SPA serving
+if ! command -v serve >/dev/null 2>&1; then
+  log "Installing serve (for static/SPA hosting)..."
+  npm install -g serve >/dev/null 2>&1
+  log "serve installed."
+else
+  log "serve already installed."
+fi
+
 # ─── Step 5/8: Install Caddy ────────────────────────────────────────────────
 
 log_section "Step 5/8: Checking Caddy"
@@ -194,6 +203,9 @@ if [ ! -f "$ENV_FILE" ]; then
   log "Generating master encryption key..."
   MASTER_KEY=$(openssl rand -hex 32)
 
+  # Detect server IP for preview URLs
+  DETECTED_IP=$(curl -4s --max-time 5 https://ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+
   cat > "$ENV_FILE" << EOF
 # PanelKit — Generated on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 PORT=${PANELKIT_PORT}
@@ -202,6 +214,7 @@ DATABASE_URL=${PANELKIT_DIR}/data/panelkit.db
 DATA_DIR=${PANELKIT_DIR}
 MASTER_KEY=${MASTER_KEY}
 CADDY_ADMIN_URL=http://localhost:2019
+SERVER_IP=${DETECTED_IP}
 NODE_ENV=production
 EOF
 
@@ -312,6 +325,8 @@ if command -v ufw >/dev/null 2>&1; then
   ufw allow 80/tcp   2>/dev/null || true
   ufw allow 443/tcp  2>/dev/null || true
   ufw allow ${PANELKIT_PORT}/tcp 2>/dev/null || true
+  # Open app port range for direct preview access before domains are configured
+  ufw allow 4000:5000/tcp 2>/dev/null || true
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────────────
