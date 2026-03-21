@@ -217,12 +217,10 @@ async function executeDeploy(
     }
 
     if (cloneNeeded) {
-      // Always clean up existing dir before cloning (handles partial clones,
-      // broken .git dirs, leftover dirs from previous failed deploys)
-      if (await dirExists(repoDir)) {
-        logs.push("[deploy] Cleaning up existing repo directory...");
-        await cleanupDir(repoDir);
-      }
+      // Always nuke the repo dir before cloning — handles partial clones,
+      // broken .git dirs, leftover dirs from previous failed deploys
+      logs.push("[deploy] Removing old repo directory...");
+      await cleanupDir(repoDir);
 
       logs.push("[deploy] Cloning repository...");
       const cloneResult = await cloneRepo({
