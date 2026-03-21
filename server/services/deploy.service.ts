@@ -291,7 +291,30 @@ async function executeDeploy(
       }
     }
 
-    // 6. Install dependencies
+    // 6. Decrypt env vars early — needed for both build and start steps
+    //    (e.g. Next.js evaluates API routes at build time, needs API keys)
+    const envRows = await db.query.appEnvVars.findMany({
+      where: eq(appEnvVars.appId, appId),
+    });
+
+    const envVars: Record<string, string> = {};
+    for (const row of envRows) {
+      try {
+        envVars[row.key] = await decrypt(row.encryptedValue);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new DeployError(
+          `Failed to decrypt env var '${row.key}': ${msg}`,
+          500
+        );
+      }
+    }
+
+    if (Object.keys(envVars).length > 0) {
+      logs.push(`[deploy] Loaded ${Object.keys(envVars).length} env var(s)`);
+    }
+
+    // 7. Install dependencies
     if (installCommand) {
       logs.push(`[deploy] Installing dependencies: ${installCommand}`);
 
@@ -300,7 +323,7 @@ async function executeDeploy(
         .set({ status: "building" })
         .where(eq(deployments.id, deploymentId));
 
-      const installResult = await runShellCommand(installCommand, repoDir);
+      const installResult = await runShellCommand(installCommand, repoDir, envVars);
 
       if (!installResult.success) {
         logs.push(`[deploy] Install failed: ${installResult.stderr}`);
@@ -314,11 +337,11 @@ async function executeDeploy(
     }
     await flushLog();
 
-    // 7. Build step
+    // 8. Build step — env vars are passed so frameworks can access them at build time
     if (buildCommand) {
       logs.push(`[deploy] Building: ${buildCommand}`);
 
-      const buildResult = await runShellCommand(buildCommand, repoDir);
+      const buildResult = await runShellCommand(buildCommand, repoDir, envVars);
 
       if (!buildResult.success) {
         logs.push(`[deploy] Build failed: ${buildResult.stderr}`);
@@ -343,24 +366,6 @@ async function executeDeploy(
       .update(deployments)
       .set({ status: "deploying" })
       .where(eq(deployments.id, deploymentId));
-
-    // 8. Get env vars — fail if any can't be decrypted
-    const envRows = await db.query.appEnvVars.findMany({
-      where: eq(appEnvVars.appId, appId),
-    });
-
-    const envVars: Record<string, string> = {};
-    for (const row of envRows) {
-      try {
-        envVars[row.key] = await decrypt(row.encryptedValue);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new DeployError(
-          `Failed to decrypt env var '${row.key}': ${msg}`,
-          500
-        );
-      }
-    }
 
     // 9. Allocate port
     let port = app.port;
@@ -600,6 +605,24 @@ export async function rollback(
     const buildCommand = app.buildCommand || detection.buildCommand;
     const startCommand = app.startCommand || detection.startCommand;
 
+    // Decrypt env vars early — needed for build step
+    const envRows = await database.query.appEnvVars.findMany({
+      where: eq(appEnvVars.appId, appId),
+    });
+
+    const envVars: Record<string, string> = {};
+    for (const row of envRows) {
+      try {
+        envVars[row.key] = await decrypt(row.encryptedValue);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new DeployError(
+          `Failed to decrypt env var '${row.key}': ${msg}`,
+          500
+        );
+      }
+    }
+
     // Clean node_modules + build output dirs for clean rollback
     const dirsToClean = ["node_modules", ...detection.buildOutputDirs];
     for (const d of dirsToClean) {
@@ -613,7 +636,7 @@ export async function rollback(
     // Install dependencies
     if (installCommand) {
       logs.push(`[rollback] Installing: ${installCommand}`);
-      const installResult = await runShellCommand(installCommand, repoDir);
+      const installResult = await runShellCommand(installCommand, repoDir, envVars);
       if (!installResult.success) {
         throw new DeployError(
           `Rollback install failed: ${installResult.stderr}`,
@@ -622,10 +645,10 @@ export async function rollback(
       }
     }
 
-    // Build step (was missing in old rollback)
+    // Build step
     if (buildCommand) {
       logs.push(`[rollback] Building: ${buildCommand}`);
-      const buildResult = await runShellCommand(buildCommand, repoDir);
+      const buildResult = await runShellCommand(buildCommand, repoDir, envVars);
       if (!buildResult.success) {
         throw new DeployError(
           `Rollback build failed: ${buildResult.stderr}`,
@@ -641,24 +664,6 @@ export async function rollback(
             500
           );
         }
-      }
-    }
-
-    // Get env vars — fail if any can't be decrypted
-    const envRows = await database.query.appEnvVars.findMany({
-      where: eq(appEnvVars.appId, appId),
-    });
-
-    const envVars: Record<string, string> = {};
-    for (const row of envRows) {
-      try {
-        envVars[row.key] = await decrypt(row.encryptedValue);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new DeployError(
-          `Failed to decrypt env var '${row.key}': ${msg}`,
-          500
-        );
       }
     }
 
@@ -894,17 +899,19 @@ async function pm2Delete(processName: string): Promise<void> {
 // ─── Shell Helpers ───────────────────────────────────────────────────────────
 
 /**
- * Run a shell command in a given directory.
+ * Run a shell command in a given directory, optionally with extra env vars.
  */
 async function runShellCommand(
   command: string,
-  cwd: string
+  cwd: string,
+  env?: Record<string, string>
 ): Promise<ShellResult> {
   try {
     const proc = Bun.spawn(["sh", "-c", command], {
       stdout: "pipe",
       stderr: "pipe",
       cwd,
+      env: env ? { ...process.env, ...env } : undefined,
     });
 
     const [stdout, stderr] = await Promise.all([
